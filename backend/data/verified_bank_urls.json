@@ -1,0 +1,73 @@
+{
+  "banks": [
+    {
+      "code": "HBL",
+      "name": "Habib Bank Limited",
+      "peekaboo_id": "kcjaastndoeauisgjod78oqnkkasrd7asAsky5",
+      "home_url": "https://www.hbl.com",
+      "peekaboo_base_url": "https://hbl-web.peekaboo.guru"
+    },
+    {
+      "code": "UBL",
+      "name": "United Bank Limited",
+      "peekaboo_id": "uljin2s3nitoi89njkhklgkj5",
+      "home_url": "https://www.ubldigital.com",
+      "peekaboo_base_url": "https://ubl-web.peekaboo.guru"
+    },
+    {
+      "code": "MEZAN",
+      "name": "Meezan Bank",
+      "peekaboo_id": "kcjaastndoeauisgjod78oqnkkasrd7asAsky5",
+      "home_url": "https://www.meezanbank.com",
+      "peekaboo_base_url": "https://meezan-web.peekaboo.guru"
+    },
+    {
+      "code": "MCB",
+      "name": "MCB Bank",
+      "peekaboo_id": "mcbuniquesdkid123456789",
+      "home_url": "https://www.mcb.com.pk",
+      "peekaboo_base_url": "https://mcb-web.peekaboo.guru"
+    },
+    {
+      "code": "BAFL",
+      "name": "Bank Alfalah",
+      "peekaboo_id": "baflsdkid987654321",
+      "home_url": "https://www.bankalfalah.com",
+      "peekaboo_base_url": "https://alfalah-web.peekaboo.guru"
+    },
+    {
+      "code": "SCB",
+      "name": "Standard Chartered Pakistan",
+      "peekaboo_id": "scbsdkid456789123",
+      "home_url": "https://www.sc.com/pk",
+      "peekaboo_base_url": "https://scb-web.peekaboo.guru"
+    },
+    {
+      "code": "ABL",
+      "name": "Allied Bank",
+      "peekaboo_id": "ablsdkid789123456",
+      "home_url": "https://www.abl.com",
+      "peekaboo_base_url": "https://abl-web.peekaboo.guru"
+    },
+    {
+      "code": "NBP",
+      "name": "National Bank of Pakistan",
+      "peekaboo_id": "nbpsdkid123789456",
+      "home_url": "https://www.nbp.com.pk",
+      "peekaboo_base_url": "https://nbp-web.peekaboo.guru"
+    }
+  ],
+  "peekaboo_api_base": "https://secure-sdk.peekaboo.guru",
+  "cities": [
+    "Abbottabad", "Attock", "Bahawalpur", "Faisalabad", "Gujranwala",
+    "Gujrat", "Hyderabad", "Islamabad", "Karachi", "Lahore", "Multan",
+    "Peshawar", "Quetta", "Rawalpindi", "Sialkot", "Sukkur"
+  ],
+  "card_types": [
+    "Credit Card", "Debit Card", "ATM Card", "All Cards"
+  ],
+  "merchant_categories": [
+    "all", "dining", "shopping", "entertainment", "travel", "health",
+    "beauty", "electronics", "fashion", "groceries", "fuel", "education"
+  ]
+}

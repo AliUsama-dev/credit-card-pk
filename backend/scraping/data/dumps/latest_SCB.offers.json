@@ -1,0 +1,86 @@
+{
+  "bank": {
+    "code": "SCB",
+    "name": "Standard Chartered Pakistan",
+    "offer_urls": [
+      "https://www.sc.com/pk/promotions/the-good-life-privileges/"
+    ],
+    "home_url": "https://www.sc.com/pk",
+    "selectors": {
+      "offer_section": ".privileges-container, .good-life-offers",
+      "offer_item": ".privilege-card, .offer-tile",
+      "title": ".privilege-title, h3.offer-title",
+      "description": ".privilege-description, .offer-desc",
+      "validity": ".validity-dates, .offer-validity",
+      "merchant": ".brand-partner, .merchant-logo",
+      "discount": ".discount-info, .privilege-discount"
+    }
+  },
+  "url": "https://www.sc.com/pk/promotions/the-good-life-privileges/",
+  "offers": [
+    {
+      "title": "Pakistan",
+      "description": "229 offers in Pakistan FILTERS",
+      "bank_code": "SCB",
+      "bank_name": "Standard Chartered Pakistan",
+      "valid_from": "2025-12-18",
+      "valid_to": "2026-02-16",
+      "offer_type": "DISCOUNT",
+      "category": "OTHER",
+      "discount_percentage": null,
+      "merchant": "Various Merchants",
+      "city": "ALL_PAKISTAN",
+      "source_url": "https://www.sc.com/pk/promotions/the-good-life-privileges/",
+      "scraped_at": "2025-12-18 11:29:50.425119+00:00",
+      "is_active": true
+    },
+    {
+      "title": "Pakistan",
+      "description": "229 offers in Pakistan FILTERS",
+      "bank_code": "SCB",
+      "bank_name": "Standard Chartered Pakistan",
+      "valid_from": "2025-12-18",
+      "valid_to": "2026-02-16",
+      "offer_type": "DISCOUNT",
+      "category": "OTHER",
+      "discount_percentage": null,
+      "merchant": "Various Merchants",
+      "city": "ALL_PAKISTAN",
+      "source_url": "https://www.sc.com/pk/promotions/the-good-life-privileges/",
+      "scraped_at": "2025-12-18 11:29:50.425859+00:00",
+      "is_active": true
+    },
+    {
+      "title": "Pakistan",
+      "description": "229 offers in Pakistan",
+      "bank_code": "SCB",
+      "bank_name": "Standard Chartered Pakistan",
+      "valid_from": "2025-12-18",
+      "valid_to": "2026-02-16",
+      "offer_type": "DISCOUNT",
+      "category": "OTHER",
+      "discount_percentage": null,
+      "merchant": "Various Merchants",
+      "city": "ALL_PAKISTAN",
+      "source_url": "https://www.sc.com/pk/promotions/the-good-life-privileges/",
+      "scraped_at": "2025-12-18 11:29:50.426252+00:00",
+      "is_active": true
+    },
+    {
+      "title": "FILTERS",
+      "description": "Special offer from Standard Chartered Pakistan",
+      "bank_code": "SCB",
+      "bank_name": "Standard Chartered Pakistan",
+      "valid_from": "2025-12-18",
+      "valid_to": "2026-02-16",
+      "offer_type": "OTHER",
+      "category": "OTHER",
+      "discount_percentage": null,
+      "merchant": "Various Merchants",
+      "city": "ALL_PAKISTAN",
+      "source_url": "https://www.sc.com/pk/promotions/the-good-life-privileges/",
+      "scraped_at": "2025-12-18 11:29:50.426772+00:00",
+      "is_active": true
+    }
+  ]
+}

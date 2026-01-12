@@ -1,0 +1,38 @@
+{
+  "bank": {
+    "code": "BAFL",
+    "name": "Bank Alfalah",
+    "offer_urls": [
+      "https://www.bankalfalah.com/conventional/discounts-privileges/"
+    ],
+    "home_url": "https://www.bankalfalah.com",
+    "selectors": {
+      "offer_section": ".privileges-section, .discounts-grid",
+      "offer_item": ".privilege-card, .discount-item",
+      "title": ".card-title, h3.privilege-title",
+      "description": ".card-content, .privilege-desc",
+      "validity": ".validity-info, .privilege-validity",
+      "merchant": ".brand-partner, .partner-info",
+      "discount": ".discount-badge, .privilege-value"
+    }
+  },
+  "url": "https://www.bankalfalah.com/conventional/discounts-privileges/",
+  "offers": [
+    {
+      "title": "Deals & Discount",
+      "description": "Offer details available on bank website.",
+      "bank_code": "BAFL",
+      "bank_name": "Bank Alfalah",
+      "valid_from": "2025-12-18",
+      "valid_to": "2026-02-16",
+      "offer_type": "DISCOUNT",
+      "category": "OTHER",
+      "discount_percentage": null,
+      "merchant": "Various Merchants",
+      "city": "ALL_PAKISTAN",
+      "source_url": "https://www.bankalfalah.com/conventional/discounts-privileges",
+      "scraped_at": "2025-12-18 09:27:59.857746+00:00",
+      "is_active": true
+    }
+  ]
+}

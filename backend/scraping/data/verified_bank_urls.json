@@ -1,0 +1,184 @@
+{
+  "banks": [
+    {
+      "code": "HBL",
+      "name": "Habib Bank Limited",
+      "offer_urls": [
+        "https://www.hbl.com/personal/cards/hbl-deals-and-discounts",
+        "https://www.hbl.com/offers"
+      ],
+      "home_url": "https://www.hbl.com",
+      "selectors": {
+        "offer_section": ".offers-container, .deals-section, .card-offers, .promotions-grid, .discounts-list",
+        "offer_item": ".offer-card, .deal-item, .promotion-card, .discount-tile, .offer-tile, .card",
+        "title": ".offer-title, .deal-title, .card-title, h3, h4",
+        "description": ".offer-desc, .deal-description, .card-text, p",
+        "validity": ".valid-until, .expiry-date, .validity, .date",
+        "merchant": ".merchant-name, .partner-name, .brand-name",
+        "discount": ".discount-percent, .discount-amount, .save-amount, .percentage"
+      }
+    },
+    {
+      "code": "UBL",
+      "name": "United Bank Limited",
+      "offer_urls": [
+        "https://www.ubldigital.com/discounts",
+        "https://www.ubldigital.com/offers"
+      ],
+      "home_url": "https://www.ubldigital.com",
+      "selectors": {
+        "offer_section": ".discounts-page, .offers-wrapper, .offer-grid, .promotions",
+        "offer_item": ".discount-card, .offer-item, .promotion-tile, .card",
+        "title": ".card-title, h3, h4, .title",
+        "description": ".card-text, .offer-description, .description",
+        "validity": ".valid-till, .offer-validity, .date-range",
+        "merchant": ".merchant-logo + span, .partner-name, .brand",
+        "discount": ".discount-badge, .save-amount, .percentage-off"
+      }
+    },
+    {
+      "code": "MCB",
+      "name": "MCB Bank",
+      "offer_urls": [
+        "https://www.mcb.com.pk/personal/cards/deal-discounts",
+        "https://www.mcb.com.pk/offers"
+      ],
+      "home_url": "https://www.mcb.com.pk",
+      "selectors": {
+        "offer_section": ".deals-section, .discounts-area, .offer-container, .promotions-grid",
+        "offer_item": ".deal-card, .discount-item, .offer-card, .promotion",
+        "title": ".deal-title, h3.title, .card-title",
+        "description": ".deal-description, .card-desc, .description",
+        "validity": ".validity-period, .deal-validity, .valid-date",
+        "merchant": ".merchant-info, .brand-name, .partner",
+        "discount": ".discount-value, .deal-discount, .percentage"
+      }
+    },
+    {
+      "code": "MEZAN",
+      "name": "Meezan Bank",
+      "offer_urls": [
+        "https://www.meezanbank.com/card-discounts/",
+        "https://www.meezanbank.com/offers/"
+      ],
+      "home_url": "https://www.meezanbank.com",
+      "selectors": {
+        "offer_section": ".discounts-page, .offers-container, .peekaboo-container, .iframes-container",
+        "offer_item": ".discount-card, .islamic-offer, .offer-tile",
+        "title": ".offer-heading, h3, h4, .title",
+        "description": ".offer-details, .discount-desc, .description",
+        "validity": ".valid-date, .offer-period, .date",
+        "merchant": ".partner-logo + div, .merchant-title, .shop-name",
+        "discount": ".discount-percentage, .save-label, .percentage"
+      }
+    },
+    {
+      "code": "BAFL",
+      "name": "Bank Alfalah",
+      "offer_urls": [
+        "https://www.bankalfalah.com/conventional/discounts-privileges/",
+        "https://www.bankalfalah.com/offers/"
+      ],
+      "home_url": "https://www.bankalfalah.com",
+      "selectors": {
+        "offer_section": ".privileges-section, .discounts-grid, .offers-container",
+        "offer_item": ".privilege-card, .discount-item, .offer-tile",
+        "title": ".card-title, h3.privilege-title, .title",
+        "description": ".card-content, .privilege-desc, .description",
+        "validity": ".validity-info, .privilege-validity, .date",
+        "merchant": ".brand-partner, .partner-info, .merchant",
+        "discount": ".discount-badge, .privilege-value, .percentage"
+      }
+    },
+    {
+      "code": "SCB",
+      "name": "Standard Chartered Pakistan",
+      "offer_urls": [
+        "https://www.sc.com/pk/promotions/the-good-life-privileges/",
+        "https://www.sc.com/pk/offers/"
+      ],
+      "home_url": "https://www.sc.com/pk",
+      "selectors": {
+        "offer_section": ".privileges-container, .good-life-offers, .offers-grid",
+        "offer_item": ".privilege-card, .offer-tile, .promotion-card",
+        "title": ".privilege-title, h3.offer-title, .title",
+        "description": ".privilege-description, .offer-desc, .description",
+        "validity": ".validity-dates, .offer-validity, .date",
+        "merchant": ".brand-partner, .merchant-logo, .partner",
+        "discount": ".discount-info, .privilege-discount, .percentage"
+      }
+    },
+    {
+      "code": "ABL",
+      "name": "Allied Bank",
+      "offer_urls": [
+        "https://www.abl.com/latest-offers/",
+        "https://www.abl.com/privileges/"
+      ],
+      "home_url": "https://www.abl.com",
+      "selectors": {
+        "offer_section": ".offers-listing, .latest-offers, .privileges-grid",
+        "offer_item": ".offer-card, .latest-offer-item, .privilege-card",
+        "title": ".offer-name, h3.offer-title, .title",
+        "description": ".offer-details, .offer-description, .description",
+        "validity": ".offer-validity, .valid-till, .date",
+        "merchant": ".partner-brand, .merchant-name, .brand",
+        "discount": ".offer-discount, .discount-tag, .percentage"
+      }
+    },
+    {
+      "code": "NBP",
+      "name": "National Bank of Pakistan",
+      "offer_urls": [
+        "https://www.nbp.com.pk/personal/cards/offers/",
+        "https://www.nbp.com.pk/cards/privileges/"
+      ],
+      "home_url": "https://www.nbp.com.pk",
+      "selectors": {
+        "offer_section": ".offers-container, .privileges-section, .promotions",
+        "offer_item": ".offer-card, .privilege-item, .promotion-tile",
+        "title": ".offer-title, .card-title, h3",
+        "description": ".offer-description, .card-text, .description",
+        "validity": ".validity-date, .offer-validity, .date",
+        "merchant": ".merchant-name, .partner, .brand",
+        "discount": ".discount-percentage, .offer-discount, .percentage"
+      }
+    },
+    {
+      "code": "JSBL",
+      "name": "JS Bank",
+      "offer_urls": [
+        "https://www.jsbl.com/personal/cards/offers/",
+        "https://www.jsbl.com/privileges/"
+      ],
+      "home_url": "https://www.jsbl.com",
+      "selectors": {
+        "offer_section": ".offers-section, .privileges-grid, .promotions",
+        "offer_item": ".offer-card, .privilege-card, .promotion-item",
+        "title": ".offer-title, .card-title, h3",
+        "description": ".offer-desc, .card-description, .description",
+        "validity": ".valid-until, .offer-validity, .date",
+        "merchant": ".merchant-logo + span, .partner-name, .brand",
+        "discount": ".discount-badge, .save-amount, .percentage"
+      }
+    },
+    {
+      "code": "BOP",
+      "name": "Bank of Punjab",
+      "offer_urls": [
+        "https://www.bop.com.pk/offers/",
+        "https://www.bop.com.pk/card-offers/"
+      ],
+      "home_url": "https://www.bop.com.pk",
+      "selectors": {
+        "offer_section": ".offers-container, .card-offers, .promotions-grid",
+        "offer_item": ".offer-item, .card-offer, .promotion-card",
+        "title": ".offer-name, .card-title, h3",
+        "description": ".offer-details, .card-desc, .description",
+        "validity": ".validity-info, .offer-validity, .date",
+        "merchant": ".merchant-name, .partner, .brand",
+        "discount": ".discount-value, .offer-discount, .percentage"
+      }
+    }
+  ]
+}
