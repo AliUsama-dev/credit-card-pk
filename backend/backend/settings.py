@@ -183,8 +183,13 @@ EMAIL_HOST_PASSWORD = 'your-password'
 MAX_UPLOAD_SIZE = 5242880  # 5MB
 ALLOWED_STATEMENT_TYPES = ['application/pdf']
 
-# OpenAI settings
+# OpenAI settings - Load from .env file
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+
+# AWS settings - Load from .env file
+AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID', '')
+AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
+AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')  # Default region
 
 # Logging configuration
 LOGGING = {

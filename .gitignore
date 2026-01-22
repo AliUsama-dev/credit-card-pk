@@ -17,3 +17,18 @@ dist/
 
 # OS
 .DS_Store
+# Django
+*.log
+db.sqlite3
+backend/db.sqlite3
+backend/debug.log
+
+# Python
+venv/
+__pycache__/
+
+# React
+node_modules/
+build/
+.env
+backend/scraping/data/dumps/
