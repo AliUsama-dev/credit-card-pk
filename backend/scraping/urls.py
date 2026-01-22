@@ -3,7 +3,8 @@ from django.urls import path
 from .views import (
     ScrapeBankOffersView, ScrapingStatusView,
     TriggerManualScrapingView, ScrapingLogsView,
-    ScrapeTrinidadTobagoBankView
+    ScrapePeekabooBankView, ScrapeAllPeekabooBanksView,
+    ScrapePeekabooCategoriesView,
 )
 
 urlpatterns = [
@@ -11,5 +12,7 @@ urlpatterns = [
     path('status/', ScrapingStatusView.as_view(), name='scraping-status'),
     path('trigger/', TriggerManualScrapingView.as_view(), name='trigger-scraping'),
     path('logs/', ScrapingLogsView.as_view(), name='scraping-logs'),
-    path('scrape-trinidad-tobago-bank/', ScrapeTrinidadTobagoBankView.as_view(), name='scrape-trinidad-tobago-bank'),
+    path('scrape-peekaboo-bank/', ScrapePeekabooBankView.as_view(), name='scrape-peekaboo-bank'),
+    path('scrape-all-peekaboo-banks/', ScrapeAllPeekabooBanksView.as_view(), name='scrape-all-peekaboo-banks'),
+    path('scrape-peekaboo-categories/', ScrapePeekabooCategoriesView.as_view(), name='scrape-peekaboo-categories'),
 ]

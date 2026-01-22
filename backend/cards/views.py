@@ -23,45 +23,6 @@ class BankListView(generics.ListAPIView):
             queryset = queryset.filter(country=country)
         return queryset.order_by('name')
     
-    def list(self, request, *args, **kwargs):
-        """Override to include available banks from scraper for Trinidad & Tobago"""
-        response = super().list(request, *args, **kwargs)
-        country = request.query_params.get('country')
-        
-        # For Trinidad & Tobago, include all available banks from scraper
-        if country == 'TT':
-            try:
-                from scraping.scrapers.trinidad_tobago_bank_scraper import TrinidadTobagoBankScraper
-                scraper = TrinidadTobagoBankScraper()
-                
-                # Get existing banks from database
-                existing_banks = {bank['code']: bank for bank in response.data if isinstance(bank, dict) and 'code' in bank}
-                existing_bank_codes = set(existing_banks.keys())
-                
-                # Add all available banks from scraper
-                all_banks_list = list(response.data) if isinstance(response.data, list) else []
-                
-                for bank_code, bank_info in scraper.banks.items():
-                    if bank_code not in existing_bank_codes:
-                        # Create a virtual bank entry for banks not yet in database
-                        all_banks_list.append({
-                            'id': None,  # Not in database yet
-                            'code': bank_code,
-                            'name': bank_info['name'],
-                            'bank_type': bank_info['type'],
-                            'country': 'TT',
-                            'website': bank_info['urls'][0] if bank_info['urls'] else '',
-                            'is_active': True,
-                            'is_available': True,  # Flag to indicate it's available but not scraped yet
-                        })
-                
-                response.data = all_banks_list
-            except Exception as e:
-                # If scraper import fails, just return existing banks
-                logger.error(f"Error including Trinidad & Tobago banks: {str(e)}")
-                pass
-        
-        return response
     
 
 # cards/views.py - Update CreditCardListView
@@ -140,14 +101,95 @@ class UserCardListCreateView(generics.ListCreateAPIView):
             UserCard.objects.filter(user=self.request.user, is_primary=True).update(is_primary=False)
         
         # Save the user card immediately (user gets instant response)
-        # IMPORTANT: Do NOT scrape here - scraping will happen automatically when user visits "My Cards" tab
-        # This ensures card addition is instant and scraping happens on-demand
         user_card = serializer.save(user=self.request.user, card_network=card_network)
         
         import logging
         logger = logging.getLogger(__name__)
+        
+        # Trigger background scraping for this new card (async, non-blocking)
         if user_card.card and user_card.card.bank:
-            logger.info(f"✅ Card added: {user_card.card.bank.code} - {user_card.card.name} (ID: {user_card.card.id}). Scraping will happen when user visits 'My Cards' tab.")
+            logger.info(f"✅ Card added: {user_card.card.bank.code} - {user_card.card.name} (ID: {user_card.card.id}). Triggering background scraping...")
+            
+            # Import scraping tasks
+            try:
+                from scraping.tasks_peekaboo import scrape_peekaboo_deals_by_bank, scrape_peekaboo_card_associations
+                from scraping.tasks_partners import scrape_partner_bank_detail
+                from offers.models_partners import PartnerBank, PartnerCard
+                from django.db.models import Q
+                import threading
+                
+                def scrape_in_background():
+                    """Scrape deals in background thread (non-blocking)"""
+                    try:
+                        bank = user_card.card.bank
+                        card = user_card.card
+                        city = 'LAHORE'  # Default city, user can change later
+                        
+                        logger.info(f"🔄 Background: Scraping Peekaboo deals for {bank.code} - {card.name}...")
+                        
+                        # Step 1: Scrape card associations (to get peekaboo_association_type_id if missing)
+                        try:
+                            scrape_peekaboo_card_associations(bank.code, city)
+                        except Exception as e:
+                            logger.warning(f"⚠️  Failed to scrape card associations: {str(e)}")
+                        
+                        # Step 2: Scrape Peekaboo deals for this specific card
+                        try:
+                            result = scrape_peekaboo_deals_by_bank(
+                                bank_code=bank.code,
+                                city_name=city,
+                                card_id=card.id  # Scrape deals specifically for this card
+                            )
+                            logger.info(f"✅ Background: Peekaboo deals scraped - {result.get('created', 0)} created, {result.get('updated', 0)} updated")
+                        except Exception as e:
+                            logger.error(f"❌ Failed to scrape Peekaboo deals: {str(e)}", exc_info=True)
+                        
+                        # Step 3: Scrape Partners Offers for this bank (if it's a partner bank)
+                        # AND link PartnerCards to this CreditCard if names match
+                        try:
+                            partner_bank = PartnerBank.objects.filter(bank=bank).first()
+                            if partner_bank:
+                                logger.info(f"🔄 Background: Scraping Partners Offers for {bank.name}...")
+                                scrape_partner_bank_detail(partner_bank.id, city.lower())
+                                logger.info(f"✅ Background: Partners Offers scraped for {bank.name}")
+                                
+                                # Step 4: Link PartnerCards to this CreditCard if names match
+                                # This ensures Partners Offers show up for user's card
+                                card_name_normalized = card.name.lower().replace(' card', '').replace('card', '').strip()
+                                matching_partner_cards = PartnerCard.objects.filter(
+                                    partner_bank=partner_bank,
+                                    is_active=True
+                                ).filter(
+                                    Q(name__iexact=card.name) |
+                                    Q(name__icontains=card_name_normalized) |
+                                    Q(name__icontains=card.name.split()[0] if card.name.split() else '')
+                                )
+                                
+                                linked_count = 0
+                                for partner_card in matching_partner_cards:
+                                    if not partner_card.credit_card or partner_card.credit_card.id != card.id:
+                                        partner_card.credit_card = card
+                                        partner_card.save(update_fields=['credit_card'])
+                                        linked_count += 1
+                                        logger.info(f"✅ Linked PartnerCard '{partner_card.name}' to CreditCard '{card.name}' (ID: {card.id})")
+                                
+                                if linked_count > 0:
+                                    logger.info(f"✅ Background: Linked {linked_count} PartnerCard(s) to user's CreditCard")
+                            else:
+                                logger.debug(f"Partners Offers not available for {bank.name}")
+                        except Exception as e:
+                            logger.error(f"❌ Failed to scrape/link Partners Offers: {str(e)}", exc_info=True)
+                            
+                    except Exception as e:
+                        logger.error(f"❌ Background scraping error: {str(e)}", exc_info=True)
+                
+                # Start background thread (non-blocking)
+                thread = threading.Thread(target=scrape_in_background, daemon=True)
+                thread.start()
+                logger.info(f"🚀 Background scraping thread started for {user_card.card.name}")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to start background scraping: {str(e)}", exc_info=True)
 
 
 class CardNetworkIdentifyView(APIView):

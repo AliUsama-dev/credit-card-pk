@@ -1,7 +1,19 @@
+# Python
 venv/
 __pycache__/
 *.pyc
+*.pyo
+*.sqlite3
+
+# Django
 .env
+staticfiles/
+media/
+
+# Node / React
 node_modules/
-dist/
 build/
+dist/
+
+# OS
+.DS_Store

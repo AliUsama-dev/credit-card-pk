@@ -43,6 +43,32 @@ try:
 except ImportError:
     bank_specific_urls = []
 
+# Partners Offers views
+try:
+    from .views_partners import (
+        PartnerBankListView, PartnerCardListView, PartnerOfferListView,
+        ScrapePartnersBanksView, ScrapePartnerBankDetailView, ScrapeAllPartnersBanksView
+    )
+    partners_urls = [
+        path('partners/banks/', PartnerBankListView.as_view(), name='partner-banks'),
+        path('partners/cards/', PartnerCardListView.as_view(), name='partner-cards'),
+        path('partners/offers/', PartnerOfferListView.as_view(), name='partner-offers'),
+        path('partners/scrape-banks/', ScrapePartnersBanksView.as_view(), name='scrape-partners-banks'),
+        path('partners/scrape-bank-detail/', ScrapePartnerBankDetailView.as_view(), name='scrape-partner-bank-detail'),
+        path('partners/scrape-all/', ScrapeAllPartnersBanksView.as_view(), name='scrape-all-partners'),
+    ]
+except ImportError:
+    partners_urls = []
+
+# Smart Recommendations (AI-powered analysis)
+try:
+    from .views_recommendations import SmartRecommendationsView
+    recommendations_urls = [
+        path('smart-recommendations/', SmartRecommendationsView.as_view(), name='smart-recommendations'),
+    ]
+except Exception:
+    recommendations_urls = []
+
 urlpatterns = [
     path('', OfferListView.as_view(), name='offer-list'),
     path('personalized/', PersonalizedOfferView.as_view(), name='personalized-offers'),
@@ -54,4 +80,4 @@ urlpatterns = [
     path('stats/', OfferStatsView.as_view(), name='offer-stats'),
     path('<int:offer_id>/activate/', ActivateOfferView.as_view(), name='activate-offer'),
     path('merchants/', MerchantListView.as_view(), name='merchant-list'),
-] + peekaboo_urls + bank_specific_urls
+] + peekaboo_urls + bank_specific_urls + partners_urls + recommendations_urls

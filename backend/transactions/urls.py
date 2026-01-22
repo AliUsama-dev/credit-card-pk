@@ -10,5 +10,7 @@ urlpatterns = [
     path('transactions/', TransactionListView.as_view(), name='transaction-list'),
     path('savings-analysis/', SavingsAnalysisView.as_view(), name='savings-analysis'),
     path('categories/', SpendingCategoriesView.as_view(), name='spending-categories'),
+    # Export endpoint - place before more specific patterns
     path('export/', ExportTransactionsView.as_view(), name='export-transactions'),
+    path('export', ExportTransactionsView.as_view(), name='export-transactions-no-slash'),
 ]

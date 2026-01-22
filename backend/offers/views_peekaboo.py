@@ -114,6 +114,8 @@ class PeekabooDealForUserCardsView(generics.ListAPIView):
         ).select_related('card', 'card__bank')
         
         # If card_id is provided, filter to that specific card
+        # IMPORTANT: When a specific card is selected, ONLY show deals directly linked to that card
+        # This ensures we only show deals scraped specifically for that card using the places URL pattern
         if card_id:
             user_cards = all_user_cards.filter(card_id=card_id)
             if not user_cards.exists():
@@ -135,13 +137,14 @@ class PeekabooDealForUserCardsView(generics.ListAPIView):
                 except (ValueError, TypeError):
                     pass
             
-            # Use the selected card ID
+            # Use ONLY the selected card ID (strict filtering)
             user_card_ids = [selected_card.id] if selected_card else []
             
             # Use the selected bank
             user_banks = [selected_bank.id] if selected_bank else []
             
             logger.info(f"User {self.request.user.id} - Selected card: {selected_card.name if selected_card else 'None'} (ID: {card_id}), Bank: {selected_bank.name if selected_bank else 'None'}")
+            logger.info(f"   STRICT MODE: Only showing deals directly linked to card {card_id} (no loose matching)")
         else:
             # No card_id provided - show deals for ALL user cards
             user_card_ids = []
@@ -210,53 +213,86 @@ class PeekabooDealForUserCardsView(generics.ListAPIView):
         # This ensures we only show deals that are actually for the user's specific cards
         
         # 1. Get deals specifically linked to user's cards (ONLY these deals)
-        # This includes deals scraped manually in "Bank & Card" tab AND automatically in "My Cards" tab
-        # IMPORTANT: This finds ALL deals linked to ANY of the user's cards
+        # IMPORTANT: When a specific card_id is provided, ONLY show deals directly linked to that card
+        # This ensures we only show deals scraped specifically for that card using the places URL pattern
         card_specific_ids = []
         if user_card_ids:
-            # First, get deals with base_filter (respects city, category, search)
-            card_specific_ids = list(
-                PeekabooDeal.objects.filter(
-                    base_filter,
-                    linked_cards__id__in=user_card_ids,  # Find deals linked to ANY of user's cards
-                    bank_id__in=user_banks  # IMPORTANT: Only deals from user's banks
-                ).order_by().values_list('id', flat=True).distinct()
-            )
+            # Check if this is a specific card selection (strict mode)
+            is_specific_card = card_id is not None
             
-            # ALSO get deals linked to user's cards that might not match base_filter (e.g., different city)
-            # This ensures deals scraped manually in "Bank & Card" tab are always shown in "My Cards"
-            # Only apply is_active and is_expired filters, ignore city/category for directly linked deals
-            minimal_filter = Q(is_active=True)
-            if not show_expired:
-                minimal_filter &= Q(is_expired=False)
-            
-            additional_linked_ids = list(
-                PeekabooDeal.objects.filter(
-                    minimal_filter,
-                    linked_cards__id__in=user_card_ids,
-                    bank_id__in=user_banks  # IMPORTANT: Only deals from user's banks
-                ).order_by().exclude(id__in=card_specific_ids).values_list('id', flat=True).distinct()
-            )
-            card_specific_ids.extend(additional_linked_ids)
-            
-            logger.info(f"✅ Found {len(card_specific_ids)} deals directly linked to user's cards (IDs: {user_card_ids})")
-            logger.info(f"   - {len(card_specific_ids) - len(additional_linked_ids)} matches base_filter (city/category)")
-            logger.info(f"   - {len(additional_linked_ids)} additional linked deals (from manual scraping)")
+            if is_specific_card:
+                # STRICT MODE: Only show deals directly linked to the selected card
+                # No loose matching - only deals scraped specifically for this card
+                logger.info(f"   STRICT MODE: Only showing deals directly linked to card {card_id}")
+                card_specific_ids = list(
+                    PeekabooDeal.objects.filter(
+                        base_filter,
+                        linked_cards__id__in=user_card_ids,  # Only deals linked to this specific card
+                        bank_id__in=user_banks  # Only deals from selected bank
+                    ).order_by().values_list('id', flat=True).distinct()
+                )
+                
+                # Also include deals that might not match base_filter (e.g., different city)
+                # But still only if they're directly linked to the selected card
+                minimal_filter = Q(is_active=True)
+                if not show_expired:
+                    minimal_filter &= Q(is_expired=False)
+                
+                additional_linked_ids = list(
+                    PeekabooDeal.objects.filter(
+                        minimal_filter,
+                        linked_cards__id__in=user_card_ids,  # Only deals linked to this specific card
+                        bank_id__in=user_banks  # Only deals from selected bank
+                    ).order_by().exclude(id__in=card_specific_ids).values_list('id', flat=True).distinct()
+                )
+                card_specific_ids.extend(additional_linked_ids)
+                
+                logger.info(f"✅ STRICT MODE: Found {len(card_specific_ids)} deals directly linked to card {card_id}")
+                logger.info(f"   - {len(card_specific_ids) - len(additional_linked_ids)} matches base_filter (city/category)")
+                logger.info(f"   - {len(additional_linked_ids)} additional linked deals")
+            else:
+                # NORMAL MODE: Show deals for all user cards (when no specific card selected)
+                # First, get deals with base_filter (respects city, category, search)
+                card_specific_ids = list(
+                    PeekabooDeal.objects.filter(
+                        base_filter,
+                        linked_cards__id__in=user_card_ids,  # Find deals linked to ANY of user's cards
+                        bank_id__in=user_banks  # IMPORTANT: Only deals from user's banks
+                    ).order_by().values_list('id', flat=True).distinct()
+                )
+                
+                # ALSO get deals linked to user's cards that might not match base_filter (e.g., different city)
+                # This ensures deals scraped manually in "Bank & Card" tab are always shown in "My Cards"
+                # Only apply is_active and is_expired filters, ignore city/category for directly linked deals
+                minimal_filter = Q(is_active=True)
+                if not show_expired:
+                    minimal_filter &= Q(is_expired=False)
+                
+                additional_linked_ids = list(
+                    PeekabooDeal.objects.filter(
+                        minimal_filter,
+                        linked_cards__id__in=user_card_ids,
+                        bank_id__in=user_banks  # IMPORTANT: Only deals from user's banks
+                    ).order_by().exclude(id__in=card_specific_ids).values_list('id', flat=True).distinct()
+                )
+                card_specific_ids.extend(additional_linked_ids)
+                
+                logger.info(f"✅ Found {len(card_specific_ids)} deals directly linked to user's cards (IDs: {user_card_ids})")
+                logger.info(f"   - {len(card_specific_ids) - len(additional_linked_ids)} matches base_filter (city/category)")
+                logger.info(f"   - {len(additional_linked_ids)} additional linked deals (from manual scraping)")
         
         # 2. DO NOT include bank-level deals - only show deals directly linked to user's cards
         # This ensures we don't show deals from other cards in the same bank
         bank_deal_ids = []
         
-        # 3. Match deals by card NAME in associations (for ALL user cards, not just selected card)
-        # IMPORTANT: Only match deals from user's banks to ensure we only show user's bank deals
-        # IMPORTANT: Match deals for ALL user cards (same as manual selection for each card)
+        # 3. Match deals by card NAME in associations (ONLY when NO specific card is selected)
+        # IMPORTANT: When a specific card is selected, skip loose matching - only show directly linked deals
         card_name_deal_ids = []
         user_card_names = []
         user_card_name_variations = []
         
-        # IMPORTANT: Match deals for ALL user cards (same as manual selection)
-        # When auto-scraping, we scrape for ALL cards, so we should match deals for ALL cards
-        if user_card_ids:
+        # Only do loose matching if NO specific card_id was provided
+        if user_card_ids and card_id is None:
             # Get all user cards to match deals for ALL of them
             from cards.models import CreditCard
             user_cards_objs = CreditCard.objects.filter(id__in=user_card_ids)
@@ -274,7 +310,7 @@ class PeekabooDealForUserCardsView(generics.ListAPIView):
             # Remove duplicates from variations
             user_card_name_variations = list(set(user_card_name_variations))
         
-        if user_card_name_variations and user_banks:
+        if user_card_name_variations and user_banks and card_id is None:
             # IMPORTANT: Only match deals from the selected bank
             from django.db import connection
             is_postgres = 'postgresql' in connection.vendor
@@ -425,187 +461,11 @@ class PeekabooDealForUserCardsView(generics.ListAPIView):
         return unique_deal_ids
     
     def list(self, request, *args, **kwargs):
-        # IMPORTANT: Auto-scrape for ALL user cards when "My Cards" tab is opened
-        # If no card_id/bank_id provided, automatically scrape for ALL user's cards
-        # This works EXACTLY like manual selection - same scraping function, same parameters
-        card_id = request.query_params.get('card_id')
-        bank_id = request.query_params.get('bank_id')
-        city = request.query_params.get('city', 'LAHORE')  # Default to LAHORE (uppercase) if not provided
-        # Normalize city to uppercase to match database format
-        if city:
-            city = city.upper()
+        # IMPORTANT: NO AUTOMATIC SCRAPING - Only return existing deals from database
+        # Scraping is now done manually by admin through admin panel
+        # This ensures fast loading and no background processing
         
-        logger.info(f"🔍 My Cards request - card_id: {card_id}, bank_id: {bank_id}, city: {city}")
-        
-        # If NO card_id AND NO bank_id provided, automatically scrape for ALL user cards
-        # IMPORTANT: Return existing deals immediately, then scrape in background
-        # This ensures user sees data instantly while scraping happens in background
-        if not card_id and not bank_id:
-            logger.info(f"🔍 AUTO MODE: No card_id/bank_id provided - will return existing deals immediately, scrape in background")
-            from scraping.tasks_peekaboo import scrape_peekaboo_deals_by_bank
-            from datetime import timedelta
-            
-            # Get all user's active cards
-            user_cards = UserCard.objects.filter(
-                user=request.user,
-                is_active=True
-            ).select_related('card', 'card__bank')
-            
-            if user_cards.exists():
-                logger.info(f"🔍 AUTO: Found {user_cards.count()} user cards - checking which need scraping")
-                
-                # Check deals per card - if a new card is added, it will be scraped even if other cards have recent deals
-                recent_threshold = timezone.now() - timedelta(hours=1)
-                cards_to_scrape = []
-                cards_with_deals = []
-                
-                for user_card in user_cards:
-                    if not user_card.card or not user_card.card.bank:
-                        continue
-                    
-                    card = user_card.card
-                    bank = card.bank
-                    
-                    # Check if this specific card has recent deals
-                    existing_deals_count = PeekabooDeal.objects.filter(
-                        linked_cards__id=card.id,
-                        bank_id=bank.id,
-                        city__iexact=city,
-                        is_active=True,
-                        is_expired=False
-                    ).filter(
-                        Q(created_at__gte=recent_threshold) | Q(updated_at__gte=recent_threshold)
-                    ).distinct().count()
-                    
-                    if existing_deals_count > 0:
-                        cards_with_deals.append((card, bank, existing_deals_count))
-                        logger.info(f"   ✅ Card {bank.code} - {card.name} (ID: {card.id}): Has {existing_deals_count} recent deals - skipping scraping")
-                    else:
-                        cards_to_scrape.append((card, bank))
-                        logger.info(f"   📥 Card {bank.code} - {card.name} (ID: {card.id}): No recent deals - will scrape in background")
-                
-                # Trigger background scraping for cards that need it (don't wait for completion)
-                if cards_to_scrape:
-                    logger.info(f"📥 AUTO: Triggering background scraping for {len(cards_to_scrape)} card(s) (out of {len(cards_with_deals) + len(cards_to_scrape)} total cards)")
-                    from scraping.tasks_peekaboo import scrape_peekaboo_entities_by_card
-                    
-                    def scrape_in_background():
-                        """Scrape deals in background thread"""
-                        for card, bank in cards_to_scrape:
-                            try:
-                                # STEP 1: Scrape entities first
-                                logger.info(f"   📥 BACKGROUND: Scraping entities for {bank.code} - {card.name} (ID: {card.id}) in {city}...")
-                                entities_result = scrape_peekaboo_entities_by_card(
-                                    bank_code=bank.code,
-                                    card_id=card.id,
-                                    city_name=city,
-                                    limit=100,
-                                    offset=0
-                                )
-                                entities_count = entities_result.get('total', 0) if isinstance(entities_result, dict) else 0
-                                logger.info(f"   ✅ BACKGROUND: Scraped {entities_count} entities for {card.name}")
-                                
-                                # STEP 2: Scrape deals
-                                logger.info(f"   📥 BACKGROUND: Scraping deals for {bank.code} - {card.name} (ID: {card.id}) in {city}...")
-                                result = scrape_peekaboo_deals_by_bank(
-                                    bank.code,
-                                    city,
-                                    card_id=card.id
-                                )
-                                
-                                if isinstance(result, dict):
-                                    created = result.get('created', 0)
-                                    updated = result.get('updated', 0)
-                                    skipped = result.get('skipped', 0)
-                                elif isinstance(result, tuple) and len(result) == 3:
-                                    created, updated, skipped = result
-                                else:
-                                    created, updated, skipped = 0, 0, 0
-                                
-                                logger.info(f"   ✅ BACKGROUND: Scraped {created} new, {updated} updated deals for {card.name}")
-                            except Exception as e:
-                                logger.error(f"   ❌ BACKGROUND: Error scraping {card.name}: {str(e)}")
-                                continue
-                    
-                    # Start scraping in background thread (non-blocking)
-                    import threading
-                    thread = threading.Thread(target=scrape_in_background, daemon=True)
-                    thread.start()
-                    logger.info(f"✅ BACKGROUND: Started background scraping thread for {len(cards_to_scrape)} cards")
-                else:
-                    logger.info(f"✅ AUTO: All {len(cards_with_deals)} card(s) have recent deals - no scraping needed")
-        
-        # If specific card_id, bank_id, and city are provided, check if scraping is needed
-        # IMPORTANT: This is MANUAL selection - uses EXACTLY the same scraping function as automatic
-        elif card_id and bank_id and city:
-            logger.info(f"🔄 MANUAL MODE: card_id={card_id}, bank_id={bank_id} provided - will scrape for this specific card (same function as auto)")
-            from scraping.tasks_peekaboo import scrape_peekaboo_deals_by_bank
-            from cards.models import CreditCard, Bank
-            from datetime import timedelta
-            
-            try:
-                # Verify card belongs to user
-                user_card = UserCard.objects.filter(
-                    user=request.user,
-                    is_active=True,
-                    card_id=card_id
-                ).select_related('card', 'card__bank').first()
-                
-                if not user_card or not user_card.card or not user_card.card.bank:
-                    logger.warning(f"User {request.user.id} - Card {card_id} not found or invalid")
-                else:
-                    selected_card = user_card.card
-                    selected_bank = selected_card.bank
-                    
-                    # Verify bank_id matches
-                    try:
-                        bank_id_int = int(bank_id)
-                        if selected_bank.id != bank_id_int:
-                            logger.warning(f"User {request.user.id} - Bank {bank_id} doesn't match card's bank")
-                        else:
-                            # IMPORTANT: Always scrape in manual mode (SAME AS AUTO MODE)
-                            # Don't check for recent scrapes - always scrape to match auto behavior exactly
-                            # Manual flow: 
-                            #   1. Scrape entities first (same as auto)
-                            #   2. Then scrape deals (same as auto)
-                            from scraping.tasks_peekaboo import scrape_peekaboo_entities_by_card
-                            
-                            # STEP 1: Scrape entities first (SAME AS AUTO)
-                            logger.info(f"📥 MANUAL STEP 1: Scraping entities for {selected_bank.code} - {selected_card.name} (ID: {card_id}) in {city}... (SAME AS AUTO - always scrape)")
-                            entities_result = scrape_peekaboo_entities_by_card(
-                                bank_code=selected_bank.code,  # EXACT same as auto
-                                card_id=card_id,               # EXACT same as auto
-                                city_name=city,                # EXACT same as auto
-                                limit=100,                     # Same as auto
-                                offset=0                       # Same as auto
-                            )
-                            entities_count = entities_result.get('total', 0) if isinstance(entities_result, dict) else 0
-                            logger.info(f"✅ MANUAL STEP 1: Scraped {entities_count} entities for {selected_card.name} (SAME AS AUTO)")
-                            
-                            # STEP 2: Scrape deals (EXACT SAME AS get_entities_by_card)
-                            # get_entities_by_card calls: scrape_peekaboo_deals_by_bank(bank.code, city, card_id=card.id)
-                            logger.info(f"📥 MANUAL STEP 2: Scraping deals for {selected_bank.code} - {selected_card.name} (ID: {card_id}) in {city}... (EXACT SAME AS get_entities_by_card)")
-                            result = scrape_peekaboo_deals_by_bank(
-                                selected_bank.code,  # EXACT same as get_entities_by_card: bank.code (positional)
-                                city,                # EXACT same as get_entities_by_card: city (positional)
-                                card_id=card_id      # EXACT same as get_entities_by_card: card_id=card.id (keyword)
-                            )
-                            # Handle both dict and tuple return types
-                            if isinstance(result, dict):
-                                created = result.get('created', 0)
-                                updated = result.get('updated', 0)
-                                skipped = result.get('skipped', 0)
-                            elif isinstance(result, tuple) and len(result) == 3:
-                                created, updated, skipped = result
-                            else:
-                                created, updated, skipped = 0, 0, 0
-                            logger.info(f"✅ Manual scraped {created} new, {updated} updated deals for {selected_card.name} (skipped: {skipped})")
-                    except (ValueError, TypeError):
-                        logger.warning(f"Invalid bank_id: {bank_id}")
-            except Exception as e:
-                logger.error(f"❌ Error scraping deals: {str(e)}")
-        
-        # After scraping (or if no scraping needed), get deals for selected card
+        # Get deals for selected card
         # get_queryset() now returns a list of IDs instead of a queryset
         deal_ids = self.get_queryset()
         
@@ -1248,6 +1108,9 @@ def get_entities_for_user_cards(request):
             cards_to_process.append((card, bank))
             logger.info(f"   📋 User Card: {card.name} (ID: {card.id}) from Bank: {bank.name} (Code: {bank.code})")
             
+            # Check if this is a newly added card (created in last 5 minutes)
+            is_new_card = uc.linked_at and (timezone.now() - uc.linked_at) < timedelta(minutes=5)
+            
             # Check if this specific card has recent deals
             existing_deals_count = PeekabooDeal.objects.filter(
                 linked_cards__id=card.id,
@@ -1259,7 +1122,11 @@ def get_entities_for_user_cards(request):
                 Q(created_at__gte=recent_threshold) | Q(updated_at__gte=recent_threshold)
             ).distinct().count()
             
-            if existing_deals_count > 0:
+            # ALWAYS scrape newly added cards, even if they have some deals
+            if is_new_card:
+                logger.info(f"   🆕 NEW CARD: {bank.code} - {card.name} (ID: {card.id}) added {timezone.now() - uc.linked_at} ago - WILL SCRAPE")
+                cards_needing_scrape.append((card.id, bank.id))
+            elif existing_deals_count > 0:
                 cards_with_deals.append((card.id, bank.id, existing_deals_count))
                 logger.info(f"   ✅ Card {bank.code} - {card.name} (ID: {card.id}): Has {existing_deals_count} recent deals - skipping scraping")
             else:

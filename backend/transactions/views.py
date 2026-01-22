@@ -5,15 +5,31 @@ from rest_framework import permissions, status
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework import generics
 from django.http import HttpResponse
-from django.db.models import Sum, Count, Q
+from django.db.models import Sum, Count, Q, Max
+from django.db import models
 import os
 from django.conf import settings
 from datetime import datetime, timedelta
 from .parsers.pdf_parser import StatementParser
 from .models import Transaction
-from cards.models import UserCard, CardRewardCategory
+from cards.models import UserCard
 import json
 import csv
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Map transaction categories to Peekaboo categories
+CATEGORY_MAP = {
+    'DINING': ['Food', 'food', 'dining', 'restaurant'],
+    'GROCERIES': ['Grocery', 'grocery', 'supermarket'],
+    'TRAVEL': ['Hotels', 'hotels', 'travel'],
+    'SHOPPING': ['Lifestyle', 'lifestyle', 'shopping', 'Home Décor', 'home-decor', 'Electronics', 'electronics'],
+    'ENTERTAINMENT': ['Entertainment', 'entertainment'],
+    'ONLINE_SHOPPING': ['E-Stores', 'e-stores', 'online'],
+    'UTILITIES': ['Public Services', 'public-services', 'utilities'],
+    'OTHER': ['Services', 'services', 'Health', 'health', 'Education', 'education', 'Self-Care', 'self-care'],
+}
 
 class StatementUploadView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -65,9 +81,78 @@ class StatementUploadView(APIView):
                 'message': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
+    def _get_peekaboo_category(self, transaction_category: str) -> list:
+        """Map transaction category to Peekaboo categories"""
+        return CATEGORY_MAP.get(transaction_category, ['OTHER', 'other'])
+    
+    def _get_best_offer_percentage(self, card_id: int, category: str) -> float:
+        """Get best % OFF offer for a card and category from Peekaboo and Partners Offers"""
+        try:
+            from offers.models_peekaboo import PeekabooDeal
+            from offers.models_partners import PartnerOffer
+            from cards.models import CreditCard
+            
+            card = CreditCard.objects.get(id=card_id)
+            peekaboo_categories = self._get_peekaboo_category(category)
+            
+            best_pct = 0.0
+            
+            # Check Peekaboo Deals
+            peekaboo_qs = PeekabooDeal.objects.filter(
+                linked_cards__id=card_id,
+                is_active=True,
+                is_expired=False
+            )
+            
+            # Filter by category (try multiple category names)
+            category_filter = Q()
+            for cat in peekaboo_categories:
+                category_filter |= Q(category__icontains=cat) | Q(title__icontains=cat)
+            
+            if category_filter:
+                peekaboo_qs = peekaboo_qs.filter(category_filter)
+            
+            # Get best percentage from Peekaboo
+            peekaboo_best = peekaboo_qs.aggregate(
+                best_pct=Max('percentage_value')
+            )['best_pct']
+            
+            if peekaboo_best:
+                best_pct = max(best_pct, float(peekaboo_best))
+            
+            # Check Partners Offers
+            partner_qs = PartnerOffer.objects.filter(
+                partner_card__credit_card_id=card_id,
+                is_active=True,
+                is_expired=False
+            )
+            
+            # Filter by category
+            category_filter = Q()
+            for cat in peekaboo_categories:
+                category_filter |= Q(category__icontains=cat) | Q(title__icontains=cat) | Q(merchant_name__icontains=cat)
+            
+            if category_filter:
+                partner_qs = partner_qs.filter(category_filter)
+            
+            # Get best percentage from Partners Offers
+            partner_best = partner_qs.aggregate(
+                best_pct=Max('discount_percentage')
+            )['best_pct']
+            
+            if partner_best:
+                best_pct = max(best_pct, float(partner_best))
+            
+            return best_pct
+            
+        except Exception as e:
+            logger.error(f"Error getting best offer percentage: {str(e)}")
+            return 0.0
+    
     def analyze_transactions(self, user, transactions, card_id=None):
+        """Analyze transactions using % OFF offers from Peekaboo and Partners Offers (Pakistani banks)"""
         # Get user's cards
-        user_cards = UserCard.objects.filter(user=user, is_active=True).select_related('card')
+        user_cards = UserCard.objects.filter(user=user, is_active=True).select_related('card', 'card__bank')
         
         # Get the card used for this statement if provided
         used_card = None
@@ -75,7 +160,7 @@ class StatementUploadView(APIView):
             try:
                 used_card = UserCard.objects.get(user=user, card_id=card_id, is_active=True)
             except UserCard.DoesNotExist:
-                pass
+                logger.warning(f"UserCard not found for card_id={card_id}")
         
         analysis = {
             'total_spent': 0,
@@ -97,44 +182,32 @@ class StatementUploadView(APIView):
                 analysis['by_category'][category] = 0
             analysis['by_category'][category] += amount
             
-            # Calculate reward earned with used card
-            reward_earned = 0
-            if used_card:
-                reward = CardRewardCategory.objects.filter(
-                    card=used_card.card,
-                    category=category,
-                    valid_from__lte=datetime.now().date(),
-                    valid_to__gte=datetime.now().date()
-                ).first()
-                if reward:
-                    reward_earned = (amount * float(reward.reward_rate)) / 100
+            # Calculate savings (% OFF) earned with used card
+            savings_earned = 0.0
+            if used_card and used_card.card:
+                best_pct = self._get_best_offer_percentage(used_card.card.id, category)
+                if best_pct > 0:
+                    savings_earned = (amount * best_pct) / 100
             
-            # Find best card for this category
+            # Find best card for this category (highest % OFF)
             best_card = None
-            best_rate = 0
             best_user_card = None
+            best_pct = 0.0
             
             for user_card in user_cards:
-                card = user_card.card
-                # Check if card has reward for this category
-                reward = CardRewardCategory.objects.filter(
-                    card=card,
-                    category=category,
-                    valid_from__lte=datetime.now().date(),
-                    valid_to__gte=datetime.now().date()
-                ).first()
-                
-                if reward and float(reward.reward_rate) > best_rate:
-                    best_rate = float(reward.reward_rate)
-                    best_card = card
-                    best_user_card = user_card
+                if user_card.card:
+                    card_pct = self._get_best_offer_percentage(user_card.card.id, category)
+                    if card_pct > best_pct:
+                        best_pct = card_pct
+                        best_card = user_card.card
+                        best_user_card = user_card
             
-            # Calculate potential reward with best card
-            potential_reward = (amount * best_rate) / 100 if best_rate > 0 else 0
-            missed_savings = potential_reward - reward_earned
+            # Calculate potential savings with best card
+            potential_savings = (amount * best_pct) / 100 if best_pct > 0 else 0
+            missed_savings = potential_savings - savings_earned
             
-            if best_card and best_rate > 0:
-                analysis['potential_savings'] += potential_reward
+            if best_card and best_pct > 0:
+                analysis['potential_savings'] += potential_savings
                 if missed_savings > 0:
                     analysis['missed_savings'] += missed_savings
                     analysis['recommendations'].append({
@@ -142,11 +215,12 @@ class StatementUploadView(APIView):
                         'date': transaction.get('date', datetime.now()).strftime('%Y-%m-%d') if isinstance(transaction.get('date'), datetime) else str(transaction.get('date', '')),
                         'amount': amount,
                         'category': category,
-                        'used_card': used_card.card.name if used_card else 'Unknown',
-                        'reward_earned': round(reward_earned, 2),
+                        'used_card': used_card.card.name if used_card and used_card.card else 'Unknown',
+                        'savings_earned': round(savings_earned, 2),
                         'recommended_card': best_card.name,
-                        'potential_reward': round(potential_reward, 2),
-                        'missed_savings': round(missed_savings, 2)
+                        'potential_savings': round(potential_savings, 2),
+                        'missed_savings': round(missed_savings, 2),
+                        'best_offer_pct': round(best_pct, 2)
                     })
         
         # Calculate card performance
@@ -154,7 +228,7 @@ class StatementUploadView(APIView):
             card_transactions = [t for t in transactions if used_card and used_card.id == user_card.id]
             if card_transactions:
                 total = sum(float(t['amount']) for t in card_transactions)
-                analysis['card_performance'][user_card.card.name] = {
+                analysis['card_performance'][user_card.card.name if user_card.card else 'Unknown'] = {
                     'total_spent': total,
                     'transaction_count': len(card_transactions)
                 }
@@ -186,42 +260,33 @@ class StatementUploadView(APIView):
                 else:
                     transaction_date = datetime.now().date()
                 
-                # Calculate rewards
+                # Calculate savings (% OFF) from Pakistani bank offers
                 amount = float(transaction_data['amount'])
                 category = transaction_data['category']
                 
-                reward_earned = 0
-                if user_card:
-                    reward = CardRewardCategory.objects.filter(
-                        card=user_card.card,
-                        category=category,
-                        valid_from__lte=datetime.now().date(),
-                        valid_to__gte=datetime.now().date()
-                    ).first()
-                    if reward:
-                        reward_earned = (amount * float(reward.reward_rate)) / 100
+                savings_earned = 0.0
+                if user_card and user_card.card:
+                    best_pct = self._get_best_offer_percentage(user_card.card.id, category)
+                    if best_pct > 0:
+                        savings_earned = (amount * best_pct) / 100
                 
-                # Find best card
+                # Find best card (highest % OFF offer)
                 best_card_id = None
-                potential_reward = 0
-                user_cards = UserCard.objects.filter(user=user, is_active=True).select_related('card')
-                best_rate = 0
+                potential_savings = 0.0
+                user_cards = UserCard.objects.filter(user=user, is_active=True).select_related('card', 'card__bank')
+                best_pct = 0.0
                 
                 for uc in user_cards:
-                    reward = CardRewardCategory.objects.filter(
-                        card=uc.card,
-                        category=category,
-                        valid_from__lte=datetime.now().date(),
-                        valid_to__gte=datetime.now().date()
-                    ).first()
-                    if reward and float(reward.reward_rate) > best_rate:
-                        best_rate = float(reward.reward_rate)
-                        best_card_id = uc.card.id
+                    if uc.card:
+                        card_pct = self._get_best_offer_percentage(uc.card.id, category)
+                        if card_pct > best_pct:
+                            best_pct = card_pct
+                            best_card_id = uc.card.id
                 
-                if best_rate > 0:
-                    potential_reward = (amount * best_rate) / 100
+                if best_pct > 0:
+                    potential_savings = (amount * best_pct) / 100
                 
-                missed_savings = potential_reward - reward_earned
+                missed_savings = potential_savings - savings_earned
                 
                 # Create or update transaction
                 transaction, created = Transaction.objects.update_or_create(
@@ -233,8 +298,8 @@ class StatementUploadView(APIView):
                         'user_card': user_card,
                         'category': category,
                         'description': transaction_data.get('description', ''),
-                        'reward_earned': reward_earned,
-                        'potential_reward': potential_reward,
+                        'reward_earned': savings_earned,  # Store as savings (% OFF) not rewards
+                        'potential_reward': potential_savings,  # Store as potential savings
                         'recommended_card_id': best_card_id,
                         'missed_savings': missed_savings,
                         'statement_file': file_path
@@ -460,8 +525,10 @@ class ExportTransactionsView(APIView):
         start_date = request.query_params.get('start_date')
         end_date = request.query_params.get('end_date')
         category = request.query_params.get('category')
+        card_id = request.query_params.get('card_id')
+        search = request.query_params.get('search')
         
-        queryset = Transaction.objects.filter(user=user)
+        queryset = Transaction.objects.filter(user=user).select_related('user_card__card__bank')
         
         if start_date:
             queryset = queryset.filter(date__gte=start_date)
@@ -469,48 +536,79 @@ class ExportTransactionsView(APIView):
             queryset = queryset.filter(date__lte=end_date)
         if category:
             queryset = queryset.filter(category=category)
+        if card_id:
+            queryset = queryset.filter(user_card__card_id=card_id)
+        if search:
+            queryset = queryset.filter(
+                Q(merchant__icontains=search) | Q(description__icontains=search)
+            )
         
         transactions = queryset.order_by('-date')
         
         if format_type == 'csv':
-            response = HttpResponse(content_type='text/csv')
+            response = HttpResponse(content_type='text/csv; charset=utf-8')
             response['Content-Disposition'] = f'attachment; filename="transactions_{datetime.now().strftime("%Y%m%d")}.csv"'
             
             writer = csv.writer(response)
-            writer.writerow(['Date', 'Merchant', 'Amount', 'Category', 'Card', 'Reward Earned', 'Potential Reward', 'Missed Savings'])
+            # Updated headers to reflect Pakistani banks (% OFF savings, not rewards)
+            writer.writerow(['Date', 'Merchant', 'Amount (PKR)', 'Category', 'Card', 'Savings Earned (% OFF)', 'Potential Savings (% OFF)', 'Missed Savings (PKR)'])
             
             for txn in transactions:
-                writer.writerow([
-                    txn.date.isoformat(),
-                    txn.merchant,
-                    txn.amount,
-                    txn.get_category_display(),
-                    txn.user_card.card.name if txn.user_card else 'Unknown',
-                    txn.reward_earned,
-                    txn.potential_reward,
-                    txn.missed_savings
-                ])
+                try:
+                    # Safely get card name
+                    card_name = 'Unknown'
+                    if txn.user_card:
+                        if hasattr(txn.user_card, 'card') and txn.user_card.card:
+                            card_name = txn.user_card.card.name
+                        elif hasattr(txn.user_card, 'card_details') and txn.user_card.card_details:
+                            card_name = txn.user_card.card_details.get('name', 'Unknown')
+                    
+                    writer.writerow([
+                        txn.date.isoformat(),
+                        txn.merchant,
+                        float(txn.amount),
+                        txn.get_category_display(),
+                        card_name,
+                        float(txn.reward_earned),  # Stored as savings (% OFF)
+                        float(txn.potential_reward),  # Stored as potential savings
+                        float(txn.missed_savings)
+                    ])
+                except Exception as e:
+                    logger.error(f"Error exporting transaction {txn.id}: {str(e)}")
+                    continue
             
             return response
         
         else:  # JSON
             transaction_data = []
             for txn in transactions:
-                transaction_data.append({
-                    'date': txn.date.isoformat(),
-                    'merchant': txn.merchant,
-                    'amount': float(txn.amount),
-                    'category': txn.category,
-                    'category_name': txn.get_category_display(),
-                    'card': txn.user_card.card.name if txn.user_card else 'Unknown',
-                    'reward_earned': float(txn.reward_earned),
-                    'potential_reward': float(txn.potential_reward),
-                    'missed_savings': float(txn.missed_savings),
-                })
+                try:
+                    # Safely get card name
+                    card_name = 'Unknown'
+                    if txn.user_card:
+                        if hasattr(txn.user_card, 'card') and txn.user_card.card:
+                            card_name = txn.user_card.card.name
+                        elif hasattr(txn.user_card, 'card_details') and txn.user_card.card_details:
+                            card_name = txn.user_card.card_details.get('name', 'Unknown')
+                    
+                    transaction_data.append({
+                        'date': txn.date.isoformat(),
+                        'merchant': txn.merchant,
+                        'amount': float(txn.amount),
+                        'category': txn.category,
+                        'category_name': txn.get_category_display(),
+                        'card': card_name,
+                        'savings_earned': float(txn.reward_earned),  # Renamed to reflect savings
+                        'potential_savings': float(txn.potential_reward),  # Renamed to reflect savings
+                        'missed_savings': float(txn.missed_savings),
+                    })
+                except Exception as e:
+                    logger.error(f"Error exporting transaction {txn.id}: {str(e)}")
+                    continue
             
             response = HttpResponse(
                 json.dumps(transaction_data, indent=2),
-                content_type='application/json'
+                content_type='application/json; charset=utf-8'
             )
             response['Content-Disposition'] = f'attachment; filename="transactions_{datetime.now().strftime("%Y%m%d")}.json"'
             return response

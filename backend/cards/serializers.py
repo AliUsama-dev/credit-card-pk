@@ -24,13 +24,32 @@ class CreditCardSerializer(serializers.ModelSerializer):
 class UserCardSerializer(serializers.ModelSerializer):
     card_details = CreditCardSerializer(source='card', read_only=True)
     card_network_display = serializers.CharField(source='get_card_network_display', read_only=True)
+    partner_offers_count = serializers.SerializerMethodField()
     # Override expiry_date to accept string input (MM/YY format)
     expiry_date = serializers.CharField(required=True, allow_blank=False)
     
     class Meta:
         model = UserCard
         fields = '__all__'
-        read_only_fields = ('user', 'linked_at', 'card_network_display')
+        read_only_fields = ('user', 'linked_at', 'card_network_display', 'partner_offers_count')
+    
+    def get_partner_offers_count(self, obj):
+        """Count active partner offers for this card"""
+        if not obj.card or not obj.card.id:
+            return 0
+        
+        try:
+            from offers.models_partners import PartnerOffer
+            if PartnerOffer:
+                count = PartnerOffer.objects.filter(
+                    is_active=True,
+                    is_expired=False,
+                    partner_card__credit_card_id=obj.card.id
+                ).count()
+                return count
+        except Exception:
+            pass
+        return 0
     
     def validate_card_number_last4(self, value):
         """Validate last 4 digits"""

@@ -376,7 +376,27 @@ def scrape_peekaboo_deals():
                     'offset': 0,
                 }
                 
-                response = requests.post(url, json=payload, headers=PEEKABOO_HEADERS, timeout=60)
+                # Add retry logic for connection errors
+                max_retries = 3
+                retry_delay = 2  # seconds
+                response = None
+                
+                for attempt in range(max_retries):
+                    try:
+                        response = requests.post(url, json=payload, headers=PEEKABOO_HEADERS, timeout=60)
+                        break  # Success, exit retry loop
+                    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, ConnectionResetError) as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"⚠️  Connection error (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {retry_delay}s...")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+                        else:
+                            logger.error(f"❌ Connection failed after {max_retries} attempts: {str(e)}")
+                            raise
+                
+                if not response:
+                    logger.error(f"❌ Failed to get response after {max_retries} attempts")
+                    continue
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -414,33 +434,78 @@ def scrape_peekaboo_deals():
 @shared_task
 def scrape_peekaboo_deals_by_bank(bank_code: str, city_name: str = 'Lahore', card_id: int = None):
     """
-    Scrape deals for a specific bank using sourceEntityId parameter.
-    This matches the behavior when user visits https://peekaboo.guru/lahore/detail/45/meezan-bank
+    Scrape deals for a specific bank and ALL its cards using the places URL pattern.
+    This matches the behavior when user visits https://peekaboo.guru/karachi/places/_all/all?ai=2644&associationTypeId=1897&card=mastercard-platinum-debit-card&discounts=al-baraka-bank&ei=6095&sourceEntityId=106
     
     Args:
-        bank_code: Bank code (e.g., 'MEEZAN')
+        bank_code: Bank code (e.g., 'AL_BARAKA', 'AL_BARAKA_BANK')
         city_name: City name (default: 'Lahore')
-        card_id: Optional card ID to link deals to a specific card
+        card_id: Optional card ID to scrape deals for only that card
     """
-    if not PeekabooDeal or not Bank:
+    if not PeekabooDeal or not Bank or not CreditCard:
         logger.error("Models not available")
         return {'created': 0, 'updated': 0, 'skipped': 0}
     
-    # Get bank's Peekaboo sourceEntityId
-    bank_info = BANK_PEEKABOO_IDS.get(bank_code.upper())
+    # Normalize bank code - handle variations like "AL_BARAKA_BANK" -> "AL_BARAKA"
+    bank_code_normalized = bank_code.upper()
+    # Try exact match first
+    bank_info = BANK_PEEKABOO_IDS.get(bank_code_normalized)
+    # If not found, try removing common suffixes like "_BANK", "_LIMITED", etc.
     if not bank_info or not isinstance(bank_info, dict):
-        logger.warning(f"No Peekaboo sourceEntityId found for bank: {bank_code}")
+        # Remove common suffixes
+        base_code = bank_code_normalized.replace('_BANK', '').replace('_LIMITED', '').replace('_LTD', '').strip('_')
+        bank_info = BANK_PEEKABOO_IDS.get(base_code)
+        if bank_info and isinstance(bank_info, dict):
+            bank_code_normalized = base_code
+            logger.info(f"✅ Matched bank code '{bank_code}' to '{base_code}' (removed suffix)")
+        else:
+            # Try prefix matching
+            for key in BANK_PEEKABOO_IDS.keys():
+                if bank_code_normalized.startswith(key) or key.startswith(bank_code_normalized.split('_')[0]):
+                    bank_info = BANK_PEEKABOO_IDS.get(key)
+                    if bank_info and isinstance(bank_info, dict):
+                        bank_code_normalized = key
+                        logger.info(f"✅ Matched bank code '{bank_code}' to '{key}' (prefix match)")
+                        break
+    
+    if not bank_info or not isinstance(bank_info, dict):
+        logger.warning(f"No Peekaboo sourceEntityId found for bank: {bank_code} (tried: {bank_code_normalized})")
+        logger.info(f"Available bank codes: {list(BANK_PEEKABOO_IDS.keys())[:10]}...")
         return {'created': 0, 'updated': 0, 'skipped': 0}
+    
     source_entity_id = bank_info.get('sourceEntityId')
+    entity_id = bank_info.get('entityId')
+    
+    if not source_entity_id or not entity_id:
+        logger.warning(f"Missing Peekaboo IDs for bank {bank_code}: sourceEntityId={source_entity_id}, entityId={entity_id}")
+        return {'created': 0, 'updated': 0, 'skipped': 0}
+    
+    # Get bank object
+    bank = Bank.objects.filter(code=bank_code_normalized).first()
+    if not bank:
+        # Try to find by code variations
+        bank = Bank.objects.filter(code__iexact=bank_code).first()
+        if not bank:
+            logger.warning(f"Bank not found in database: {bank_code} (normalized: {bank_code_normalized})")
+            return {'created': 0, 'updated': 0, 'skipped': 0}
     
     # Get city coordinates
     city_info = next((c for c in CITIES if c['name'] == city_name), None)
     if not city_info:
         city_info = {'name': city_name, 'code': city_name.upper(), 'lat': 31.5204, 'long': 74.3587}  # Default to Lahore
     
+    city_slug = city_info['name'].lower()
+    bank_slug = BANK_SLUG_MAP.get(bank_code_normalized, bank_code_normalized.lower().replace('_', '-'))
+    
+    total_created = 0
+    total_updated = 0
+    total_skipped = 0
+    
     try:
+        # Step 1 (optional): scrape ALL bank deals (bank discounts page count).
+        # This is useful for the Bank overview discounts tab, but deals may not link cleanly to cards.
+        logger.info(f"🔍 Step 1: Scraping ALL bank deals for {bank.name} in {city_name} (bank-wide)")
         url = f"{PEEKABOO_API_BASE}/api/v8/entity/deals"
-        
         payload = {
             'city': city_info['name'],
             'country': 'Pakistan',
@@ -450,34 +515,158 @@ def scrape_peekaboo_deals_by_bank(bank_code: str, city_name: str = 'Lahore', car
             'long': city_info['long'],
             'limit': 1000,
             'offset': 0,
-            'sourceEntityId': str(source_entity_id),  # Filter by bank
+            'sourceEntityId': str(source_entity_id),
         }
-        
+
         response = requests.post(url, json=payload, headers=PEEKABOO_HEADERS, timeout=60)
-        
         if response.status_code == 200:
             data = response.json()
-            
-            # Handle response structure
-            if isinstance(data, dict):
-                deals_list = data.get('deals', [])
-                total_deals = data.get('total', len(deals_list))
-            else:
-                deals_list = data if isinstance(data, list) else []
-                total_deals = len(deals_list)
-            
-            logger.info(f"✅ Scraped {total_deals} deals for {bank_code} in {city_name} {'for card ' + str(card_id) if card_id else ''}")
-            
-            created, updated, skipped = process_peekaboo_deals(deals_list, city_info, bank_code=bank_code, card_id=card_id)
-            
-            logger.info(f"✅ Processed {bank_code} ({city_name}): {created} created, {updated} updated, {skipped} skipped")
-            return {'created': created, 'updated': updated, 'skipped': skipped}
+            all_deals_list = data.get('deals', []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            total_deals = data.get('total', len(all_deals_list)) if isinstance(data, dict) else len(all_deals_list)
+            logger.info(f"✅ Bank-wide: scraped {total_deals} total deals for {bank.name} (got {len(all_deals_list)} in response)")
+
+            created, updated, skipped = process_peekaboo_deals(
+                all_deals_list,
+                city_info,
+                bank_code=bank.code,  # REAL DB bank.code
+                card_id=None,
+            )
+            total_created += created
+            total_updated += updated
+            total_skipped += skipped
         else:
-            logger.warning(f"❌ Failed to fetch deals for {bank_code}: {response.status_code} - {response.text[:200]}")
-            return {'created': 0, 'updated': 0, 'skipped': 0}
+            logger.warning(f"❌ Failed bank-wide fetch for {bank.name}: {response.status_code} - {response.text[:200]}")
+
+        # Step 2 (critical): scrape per-card deals like the UI URL:
+        # https://peekaboo.guru/karachi/places/_all/all?ai=...&associationTypeId=...&card=...&discounts=...&ei=...&selfDeal=true&sourceEntityId=...
+        # These results MUST be linked to the selected card; this is what the user sees.
+        logger.info(f"🔍 Step 2: Scraping card-specific deals (selfDeal=true) for {bank.name} in {city_name}")
+
+        # Ensure cards have peekaboo_association_type_id and peekaboo_card_slug
+        # If missing, populate from associationType endpoint
+        has_any = CreditCard.objects.filter(bank=bank, is_active=True, peekaboo_association_type_id__isnull=False).exclude(peekaboo_association_type_id=0).exists()
+        if not has_any:
+            logger.info(f"🔍 No cards with Peekaboo associations found for {bank.name}; scraping card associations first...")
+            scrape_peekaboo_card_associations(bank_code_normalized, city_name)
+
+        cards_qs = CreditCard.objects.filter(bank=bank, is_active=True).exclude(peekaboo_association_type_id__isnull=True).exclude(peekaboo_association_type_id=0)
+        if card_id:
+            cards_qs = cards_qs.filter(id=card_id)
+
+        if not cards_qs.exists():
+            logger.warning(f"⚠️  No cards with Peekaboo associationTypeId found for {bank.name}; cannot scrape card-specific deals.")
+            logger.info(f"✅ TOTAL for {bank.name} ({city_name}): {total_created} created, {total_updated} updated, {total_skipped} skipped")
+            return {'created': total_created, 'updated': total_updated, 'skipped': total_skipped}
+
+        # Fetch association list ONCE to map typeId -> associationId (ai)
+        assoc_map = {}
+        try:
+            assoc_url = f"{PEEKABOO_API_BASE}/api/sourceEntity/{entity_id}/associationType/_all"
+            assoc_params = {
+                'city': city_info['name'],
+                'country': 'Pakistan',
+                'entity': bank.name,
+                'language': 'en',
+                'lat': city_info['lat'],
+                'long': city_info['long'],
+                'limit': 200,
+                'offset': 0,
+            }
+            assoc_response = requests.get(assoc_url, params=assoc_params, headers=PEEKABOO_HEADERS, timeout=30)
+            if assoc_response.status_code == 200:
+                associations = assoc_response.json()
+                if isinstance(associations, list):
+                    for assoc in associations:
+                        try:
+                            type_id = assoc.get('typeId') or assoc.get('associationTypeId')
+                            ai = assoc.get('associationId') or assoc.get('id')
+                            if type_id and ai:
+                                assoc_map[int(type_id)] = int(ai)
+                        except Exception:
+                            continue
+        except Exception as e:
+            logger.debug(f"Could not fetch association list for bank {bank.name}: {str(e)}")
+
+        for card in cards_qs:
+            try:
+                association_type_id = card.peekaboo_association_type_id
+                if not association_type_id:
+                    continue
+
+                try:
+                    ai = assoc_map.get(int(association_type_id), int(association_type_id))
+                except Exception:
+                    ai = association_type_id
+
+                card_slug = card.peekaboo_card_slug or card.name.lower().replace(' ', '-').replace('card', '').replace('debit', '').replace('credit', '').strip('-')
+
+                card_payload = {
+                    'city': city_info['name'],
+                    'country': 'Pakistan',
+                    'entity': 'All',
+                    'language': 'en',
+                    'lat': city_info['lat'],
+                    'long': city_info['long'],
+                    'limit': 1000,
+                    'offset': 0,
+                    'sourceEntityId': str(source_entity_id),
+                    'associationTypeId': str(association_type_id),
+                    'ai': str(ai),
+                    'card': card_slug,
+                    'discounts': bank_slug,
+                    'ei': str(entity_id),
+                    'selfDeal': True,
+                }
+
+                logger.info(f"🔍 Card-specific: {bank.name} - {card.name} (typeId={association_type_id}, ai={ai})")
+                
+                # Add retry logic for connection errors
+                max_retries = 3
+                retry_delay = 2
+                card_response = None
+                
+                for attempt in range(max_retries):
+                    try:
+                        card_response = requests.post(url, json=card_payload, headers=PEEKABOO_HEADERS, timeout=60)
+                        break
+                    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, ConnectionResetError) as e:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"⚠️  Connection error for card {card.name} (attempt {attempt + 1}/{max_retries}): {str(e)}. Retrying in {retry_delay}s...")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2
+                        else:
+                            logger.error(f"❌ Connection failed for card {card.name} after {max_retries} attempts: {str(e)}")
+                            raise
+                
+                if not card_response:
+                    logger.error(f"❌ Failed to get response for card {card.name} after {max_retries} attempts")
+                    continue
+                
+                if card_response.status_code != 200:
+                    logger.debug(f"Card-specific fetch failed for {card.name}: {card_response.status_code}")
+                    continue
+
+                card_data = card_response.json()
+                card_deals_list = card_data.get('deals', []) if isinstance(card_data, dict) else (card_data if isinstance(card_data, list) else [])
+
+                card_created, card_updated, card_skipped = process_peekaboo_deals(
+                    card_deals_list,
+                    city_info,
+                    bank_code=bank.code,  # REAL DB bank.code
+                    card_id=card.id,       # force link to this card
+                )
+                total_created += card_created
+                total_updated += card_updated
+                total_skipped += card_skipped
+            except Exception as e:
+                logger.error(f"Error scraping card-specific deals for {card.name}: {str(e)}", exc_info=True)
+                continue
+        
+        logger.info(f"✅ TOTAL for {bank.name} ({city_name}): {total_created} created, {total_updated} updated, {total_skipped} skipped")
+        return {'created': total_created, 'updated': total_updated, 'skipped': total_skipped}
             
     except Exception as e:
-        logger.error(f"Error scraping deals for {bank_code}: {str(e)}")
+        logger.error(f"Error scraping deals for {bank_code}: {str(e)}", exc_info=True)
         return {'created': 0, 'updated': 0, 'skipped': 0}
 
 @shared_task
@@ -843,6 +1032,53 @@ def scrape_peekaboo_card_associations(bank_code: str, city_name: str = 'Lahore')
         return 0
 
 @shared_task
+@shared_task
+def scrape_all_banks_card_deals_async(city: str = 'LAHORE'):
+    """
+    Async Celery task to scrape Peekaboo deals for ALL banks in a specific city.
+    This is called from the admin panel "Scrape All Banks" button.
+    """
+    city_upper = city.upper() if city else 'LAHORE'
+    logger.info(f"🚀 Starting async scraping for ALL banks in {city_upper}...")
+    
+    total_stats = {'created': 0, 'updated': 0, 'skipped': 0, 'banks_processed': 0}
+    
+    # Convert city name to proper format (LAHORE -> Lahore)
+    city_name = city_upper.capitalize() if len(city_upper) > 1 else city_upper
+    
+    for bank_code in BANK_PEEKABOO_IDS.keys():
+        bank_info = BANK_PEEKABOO_IDS[bank_code]
+        if not bank_info or not isinstance(bank_info, dict) or not bank_info.get('sourceEntityId'):
+            continue  # Skip banks without known sourceEntityId
+        
+        try:
+            logger.info(f"📊 Scraping deals for {bank_code} in {city_name}...")
+            
+            # Scrape deals for this bank
+            result = scrape_peekaboo_deals_by_bank(bank_code, city_upper)
+            total_stats['created'] += result.get('created', 0)
+            total_stats['updated'] += result.get('updated', 0)
+            total_stats['skipped'] += result.get('skipped', 0)
+            total_stats['banks_processed'] += 1
+            
+            logger.info(f"   ✅ {bank_code}: {result.get('created', 0)} created, {result.get('updated', 0)} updated")
+            
+        except Exception as e:
+            logger.error(f"   ❌ Error scraping {bank_code} in {city_name}: {str(e)}")
+            continue
+    
+    logger.info(f"🎉 COMPLETE: Processed {total_stats['banks_processed']} banks. "
+                f"Created: {total_stats['created']}, Updated: {total_stats['updated']}, Skipped: {total_stats['skipped']}")
+    
+    return {
+        'status': 'success',
+        'city': city_upper,
+        'banks_processed': total_stats['banks_processed'],
+        'total_created': total_stats['created'],
+        'total_updated': total_stats['updated'],
+        'total_skipped': total_stats['skipped'],
+    }
+
 def scrape_all_banks_card_deals():
     """
     Scrape deals for all Pakistani banks with card associations.
@@ -974,7 +1210,9 @@ def scrape_all_user_cards_deals():
                 total_stats['updated'] += updated
                 total_stats['skipped'] += skipped
                 
-                logger.info(f"   ✅ Scraped {created} new, {updated} updated deals for {card.name} (skipped: {skipped})")
+                # Reduced logging - only log if significant changes
+                if created > 0 or updated > 10:
+                    logger.info(f"   ✅ Scraped {created} new, {updated} updated deals for {card.name} (skipped: {skipped})")
             except Exception as e:
                 logger.error(f"   ❌ Error scraping deals for User {user.id} - {card.name}: {str(e)}")
                 continue
@@ -1086,7 +1324,19 @@ def process_peekaboo_deals(deals_list: list, city: dict, bank_code: str = None, 
                     # Strategy 1: Use bank_code parameter if provided (HIGHEST PRIORITY)
                     # This ensures bank is correctly identified when scraping for a specific bank/card
                     if bank_code:
-                        bank = Bank.objects.filter(code__iexact=bank_code.upper()).first()
+                        bank_code_upper = str(bank_code).upper()
+                        bank = Bank.objects.filter(code__iexact=bank_code_upper).first()
+                        if not bank:
+                            # Handle common variations: AL_BARAKA vs AL_BARAKA_BANK, etc.
+                            base_code = (
+                                bank_code_upper.replace('_BANK', '')
+                                .replace('_LIMITED', '')
+                                .replace('_LTD', '')
+                                .strip('_')
+                            )
+                            bank = Bank.objects.filter(code__iexact=base_code).first()
+                            if not bank:
+                                bank = Bank.objects.filter(code__iexact=f"{base_code}_BANK").first()
                         if bank:
                             logger.debug(f"✅ Matched bank from bank_code parameter: {bank.name}")
                     
@@ -1210,10 +1460,22 @@ def process_peekaboo_deals(deals_list: list, city: dict, bank_code: str = None, 
                             logger.debug(f"✅ Linked deal {deal_id} to {len(linked_card_ids)} cards from bank {bank.name} (general bank scraping)")
                     
                     # Prepare deal data
+                    # IMPORTANT: store category so Smart Recommendations can filter like Peekaboo /places/{categoryId}/{slug}
+                    raw_category = (
+                        deal_data.get('categoryName')
+                        or deal_data.get('category')
+                        or deal_data.get('dealCategory')
+                        or ''
+                    )
+                    # Sometimes category is an object/dict; try common keys
+                    if isinstance(raw_category, dict):
+                        raw_category = raw_category.get('name') or raw_category.get('categoryName') or raw_category.get('title') or ''
+
                     deal_defaults = {
                         'title': deal_data.get('title', ''),
                         'description': deal_data.get('description', ''),
                         'percentage_value': deal_data.get('percentageValue', 0),
+                        'discount_amount': deal_data.get('discountAmount', deal_data.get('discount_amount', None)),
                         'start_date': start_date,
                         'end_date': end_date,
                         'target_entity_name': deal_data.get('targetEntityName', ''),
@@ -1221,6 +1483,7 @@ def process_peekaboo_deals(deals_list: list, city: dict, bank_code: str = None, 
                         'source_entity_name': source_entity_name,
                         'source_entity_logo': deal_data.get('sourceEntityLogo', ''),
                         'associations': associations,  # Store raw associations JSON
+                        'category': (str(raw_category).strip()[:100] if raw_category else None),
                         'city': city.get('name', ''),
                         'last_scraped_at': timezone.now(),
                     }
@@ -1265,13 +1528,17 @@ def process_peekaboo_deals(deals_list: list, city: dict, bank_code: str = None, 
                         # This ensures deals are linked when card_id is provided
                         existing_deal.linked_cards.set(linked_card_ids)
                         if linked_card_ids:
-                            try:
-                                card_names = [CreditCard.objects.get(id=cid).name for cid in linked_card_ids]
-                                logger.info(f"✅ Updated linked cards for deal {deal_id}: {len(linked_card_ids)} cards - {card_names}")
-                            except Exception as e:
-                                logger.info(f"✅ Updated linked cards for deal {deal_id}: {len(linked_card_ids)} cards")
+                            # Reduced logging - only log significant updates
+                            if len(linked_card_ids) > 5:
+                                try:
+                                    card_names = [CreditCard.objects.get(id=cid).name for cid in linked_card_ids]
+                                    logger.debug(f"Updated linked cards for deal {deal_id}: {len(linked_card_ids)} cards")
+                                except Exception as e:
+                                    logger.debug(f"Updated linked cards for deal {deal_id}: {len(linked_card_ids)} cards")
                         else:
-                            logger.warning(f"⚠️  No cards linked for deal {deal_id} (card_id={card_id}, bank={bank.name if bank else 'None'}, linked_card_ids was empty)")
+                            # Bank-wide deals often don't include usable association data for card linking.
+                            # Don't spam terminal for every deal; keep this as debug.
+                            logger.debug(f"No cards linked for deal {deal_id} (card_id={card_id}, bank={bank.name if bank else 'None'})")
                     else:
                         # Create new deal
                         deal = PeekabooDeal.objects.create(
@@ -1288,7 +1555,9 @@ def process_peekaboo_deals(deals_list: list, city: dict, bank_code: str = None, 
                             except Exception as e:
                                 logger.info(f"✅ Created deal {deal_id} with {len(linked_card_ids)} linked cards")
                         else:
-                            logger.warning(f"⚠️  Created deal {deal_id} with NO linked cards (card_id={card_id}, bank={bank.name if bank else 'None'})")
+                            # Bank-wide deals often don't include usable association data for card linking.
+                            # Don't spam terminal for every deal; keep this as debug.
+                            logger.debug(f"Created deal {deal_id} with NO linked cards (card_id={card_id}, bank={bank.name if bank else 'None'})")
                         
                         created_count += 1
                         logger.debug(f"✅ Created deal {deal_id}: {deal_data.get('title', '')[:50]}")
