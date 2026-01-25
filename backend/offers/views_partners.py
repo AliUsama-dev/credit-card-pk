@@ -104,45 +104,86 @@ class PartnerOfferListView(generics.ListAPIView):
                         bank_code = credit_card.bank.code.upper()
                         bank_slug = BANK_SLUG_MAP.get(bank_code, credit_card.bank.name.lower().replace(' ', '-'))
                     
-                    # ULTRA-STRICT: ONLY show offers that meet ALL of these conditions:
-                    # 1. Offer is linked to the selected card (partner_card__credit_card_id)
-                    # 2. Offer's bank matches selected card's bank (partner_bank.bank)
-                    # 3. Offer's source_url contains the exact card slug (card=mastercard-silver-debit-card)
-                    # 4. Offer's source_url contains the exact bank slug (discounts=al-baraka-bank)
-                    # This ensures 100% accuracy - no offers from other cards or banks
+                    # PRIMARY FILTERING: Use available_on_cards ManyToMany field if it exists
+                    # This is the most accurate way to filter offers based on the "associations" array from Peekaboo API
+                    from offers.models_partners import PartnerCard, PartnerBank
+                    from django.db.models import Q
+                    from django.core.exceptions import FieldError
                     
-                    # Start with offers linked to the selected card
-                    queryset = queryset.filter(
-                        partner_card__credit_card_id=credit_card_id_int
-                    )
-                    
-                    # CRITICAL: Filter by bank to ensure we only get offers from the selected bank
+                    # Get the PartnerCard(s) that match this CreditCard
+                    partner_bank = None
                     if credit_card.bank:
-                        from offers.models_partners import PartnerBank
                         partner_bank = PartnerBank.objects.filter(bank=credit_card.bank, is_active=True).first()
+                    
+                    # Find PartnerCard(s) linked to this CreditCard
+                    matching_partner_cards = PartnerCard.objects.filter(
+                        credit_card_id=credit_card_id_int,
+                        is_active=True
+                    )
+                    if partner_bank:
+                        matching_partner_cards = matching_partner_cards.filter(partner_bank=partner_bank)
+                    
+                    # Try to use available_on_cards ManyToMany field (most accurate)
+                    # CRITICAL: Only show offers where the selected card is EXPLICITLY in available_on_cards
+                    # This ensures we only show offers from the "associations" array for this specific card
+                    try:
+                        if matching_partner_cards.exists():
+                            # Filter offers where the selected card is in available_on_cards
+                            partner_card_ids = list(matching_partner_cards.values_list('id', flat=True))
+                            
+                            # STRICT FILTERING: Only offers where this card is in available_on_cards
+                            # Use prefetch_related to optimize the query
+                            queryset = queryset.filter(
+                                available_on_cards__id__in=partner_card_ids
+                            ).prefetch_related('available_on_cards').distinct()
+                            
+                            # CRITICAL: Also filter by bank to ensure we only get offers from the selected bank
+                            if partner_bank:
+                                queryset = queryset.filter(partner_bank=partner_bank)
+                            elif credit_card.bank:
+                                # If no partner_bank found, return empty (can't match bank)
+                                queryset = queryset.none()
+                                logger.warning(f"   ⚠️ No PartnerBank found for bank '{credit_card.bank.name}', returning no offers")
+                            
+                            # Count offers found (before deduplication and other filters)
+                            offers_count = queryset.count()
+                            logger.info(f"   ✅ Using available_on_cards filter: {len(partner_card_ids)} PartnerCard(s) matched")
+                            logger.info(f"   📊 Offers found in associations for this card: {offers_count}")
+                            logger.info(f"   🔍 PartnerCard IDs: {partner_card_ids}")
+                            
+                            if offers_count == 0:
+                                logger.warning(f"   ⚠️ No offers found in available_on_cards for {len(partner_card_ids)} PartnerCard(s)")
+                            else:
+                                # Log a sample of offer IDs to verify filtering
+                                sample_offer_ids = list(queryset.values_list('id', flat=True)[:5])
+                                logger.info(f"   📋 Sample offer IDs (first 5): {sample_offer_ids}")
+                        else:
+                            logger.warning(f"   ⚠️ No PartnerCard found for CreditCard ID {credit_card_id_int}, returning empty")
+                            queryset = queryset.none()
+                    except (FieldError, AttributeError) as e:
+                        # available_on_cards field doesn't exist yet (migrations not run)
+                        logger.warning(f"   ⚠️ available_on_cards field not found: {str(e)}, using fallback filtering")
+                        # FALLBACK: Use the old filtering logic
+                        queryset = queryset.filter(
+                            partner_card__credit_card_id=credit_card_id_int
+                        )
+                        
+                        # Filter by bank
                         if partner_bank:
                             queryset = queryset.filter(partner_bank=partner_bank)
-                        else:
-                            # If no partner_bank found, return empty (can't match bank)
+                        elif credit_card.bank:
                             queryset = queryset.none()
                             logger.warning(f"   ⚠️ No PartnerBank found for bank '{credit_card.bank.name}', returning no offers")
-                    
-                    # CRITICAL: Filter by source_url to ensure it contains the EXACT card slug
-                    # This is the KEY fix - only show offers where URL matches the selected card
-                    if card_slug:
-                        queryset = queryset.filter(
-                            source_url__icontains=f'card={card_slug}'
-                        )
-                    else:
-                        # If no card slug, return empty (can't verify card match)
-                        queryset = queryset.none()
-                        logger.warning(f"   ⚠️ No card slug found for card '{credit_card.name}', returning no offers")
-                    
-                    # CRITICAL: Also filter by bank slug in source_url for double verification
-                    if bank_slug:
-                        queryset = queryset.filter(
-                            source_url__icontains=f'discounts={bank_slug}'
-                        )
+                        
+                        # Filter by source_url as additional verification
+                        if card_slug:
+                            queryset = queryset.filter(
+                                Q(source_url__icontains=f'card={card_slug}&') | Q(source_url__iendswith=f'card={card_slug}')
+                            )
+                        if bank_slug:
+                            queryset = queryset.filter(
+                                source_url__icontains=f'discounts={bank_slug}'
+                            )
                     
                     # Auto-link PartnerCards if needed (for future queries)
                     if credit_card.bank:
@@ -354,13 +395,23 @@ class ScrapeAllPartnersBanksView(APIView):
         
         try:
             from scraping.tasks_partners import scrape_all_partners_banks
-            result = scrape_all_partners_banks(city)
-            
-            return Response({
-                'status': 'success',
-                'message': f'Scraped {result.get("banks_scraped", 0)} partner banks',
-                **result
-            })
+            # Call the task asynchronously using .delay() to avoid Celery task resolution issues
+            try:
+                task = scrape_all_partners_banks.delay(city)
+                return Response({
+                    'status': 'success',
+                    'message': 'Scraping started for all partner banks',
+                    'task_id': task.id
+                })
+            except Exception as async_error:
+                # If async call fails, try synchronous call (for development/testing)
+                logger.warning(f"Async call failed, trying synchronous: {str(async_error)}")
+                result = scrape_all_partners_banks(city)
+                return Response({
+                    'status': 'success',
+                    'message': f'Scraped {result.get("banks_scraped", 0)} partner banks',
+                    **result
+                })
         except Exception as e:
             logger.error(f"Error scraping all partner banks: {str(e)}", exc_info=True)
             return Response({

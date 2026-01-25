@@ -224,11 +224,41 @@ class SmartRecommendationsView(APIView):
 
         # Partners offers: best discount_percentage per credit_card_id + count
         # IMPORTANT: ONLY show deals for the selected category (no fallback to all offers)
-        partners_base_qs = PartnerOffer.objects.filter(
-            is_active=True,
-            is_expired=False,
-            partner_card__credit_card_id__in=card_ids,
-        )
+        # Use available_on_cards ManyToMany field if it exists, otherwise fallback to partner_card__credit_card_id
+        from django.core.exceptions import FieldError
+        try:
+            # Try to use available_on_cards for more accurate filtering
+            # Find PartnerCards linked to user's CreditCards
+            from offers.models_partners import PartnerCard
+            partner_card_ids = list(
+                PartnerCard.objects.filter(
+                    credit_card_id__in=card_ids,
+                    is_active=True
+                ).values_list('id', flat=True)
+            )
+            
+            if partner_card_ids:
+                # Filter offers where user's cards are in available_on_cards
+                partners_base_qs = PartnerOffer.objects.filter(
+                    is_active=True,
+                    is_expired=False,
+                    available_on_cards__id__in=partner_card_ids,
+                ).distinct()
+            else:
+                # Fallback to partner_card__credit_card_id if no PartnerCards found
+                partners_base_qs = PartnerOffer.objects.filter(
+                    is_active=True,
+                    is_expired=False,
+                    partner_card__credit_card_id__in=card_ids,
+                )
+        except (FieldError, AttributeError):
+            # available_on_cards field doesn't exist yet (migrations not run)
+            # Fallback to partner_card__credit_card_id
+            partners_base_qs = PartnerOffer.objects.filter(
+                is_active=True,
+                is_expired=False,
+                partner_card__credit_card_id__in=card_ids,
+            )
         
         # Apply category filter - REQUIRED, no fallback
         if category:
@@ -246,15 +276,44 @@ class SmartRecommendationsView(APIView):
 
         partners_best_by_card: Dict[int, float] = {}
         partners_count_by_card: Dict[int, int] = {}
-        for row in (
-            partners_qs.values("partner_card__credit_card_id")
-            .annotate(best_pct=Max("discount_percentage"))
-        ):
-            cid = row.get("partner_card__credit_card_id")
-            if cid:
-                partners_best_by_card[int(cid)] = _safe_float(row.get("best_pct"))
-        for cid in card_ids:
-            partners_count_by_card[cid] = partners_qs.filter(partner_card__credit_card_id=cid).count()
+        
+        # Count offers per card using available_on_cards if available, otherwise use partner_card__credit_card_id
+        try:
+            from offers.models_partners import PartnerCard
+            for cid in card_ids:
+                # Find PartnerCard(s) linked to this CreditCard
+                partner_cards = PartnerCard.objects.filter(
+                    credit_card_id=cid,
+                    is_active=True
+                )
+                partner_card_ids = list(partner_cards.values_list('id', flat=True))
+                
+                if partner_card_ids:
+                    # Filter offers where this card is in available_on_cards
+                    card_offers = partners_qs.filter(available_on_cards__id__in=partner_card_ids).distinct()
+                    partners_count_by_card[cid] = card_offers.count()
+                    # Get best discount percentage for this card
+                    best_pct = card_offers.aggregate(best=Max("discount_percentage")).get("best")
+                    if best_pct:
+                        partners_best_by_card[cid] = _safe_float(best_pct)
+                else:
+                    # Fallback to partner_card__credit_card_id
+                    card_offers = partners_qs.filter(partner_card__credit_card_id=cid)
+                    partners_count_by_card[cid] = card_offers.count()
+                    best_pct = card_offers.aggregate(best=Max("discount_percentage")).get("best")
+                    if best_pct:
+                        partners_best_by_card[cid] = _safe_float(best_pct)
+        except (FieldError, AttributeError):
+            # Fallback to old method if available_on_cards doesn't exist
+            for row in (
+                partners_qs.values("partner_card__credit_card_id")
+                .annotate(best_pct=Max("discount_percentage"))
+            ):
+                cid = row.get("partner_card__credit_card_id")
+                if cid:
+                    partners_best_by_card[int(cid)] = _safe_float(row.get("best_pct"))
+            for cid in card_ids:
+                partners_count_by_card[cid] = partners_qs.filter(partner_card__credit_card_id=cid).count()
 
         def _peekaboo_top_offers_for_card(card_id: int) -> List[Dict[str, Any]]:
             # CRITICAL: Only show deals that are ACTUALLY linked to this specific card
@@ -465,10 +524,35 @@ class SmartRecommendationsView(APIView):
             if card_id not in card_ids:
                 return []  # Not a user's card, return empty
             
-            qs = (
-                partners_qs.filter(partner_card__credit_card_id=card_id)
-                .order_by("-discount_percentage", "-valid_to", "-id")
+            # Find PartnerCard(s) linked to this CreditCard
+            from offers.models_partners import PartnerCard
+            partner_cards = PartnerCard.objects.filter(
+                credit_card_id=card_id,
+                is_active=True
             )
+            partner_card_ids = list(partner_cards.values_list('id', flat=True))
+            
+            # Use available_on_cards if available, otherwise fallback to partner_card__credit_card_id
+            try:
+                if partner_card_ids:
+                    # Filter offers where this card is in available_on_cards
+                    qs = (
+                        partners_qs.filter(available_on_cards__id__in=partner_card_ids)
+                        .distinct()
+                        .order_by("-discount_percentage", "-valid_to", "-id")
+                    )
+                else:
+                    # No PartnerCards found, try fallback
+                    qs = (
+                        partners_qs.filter(partner_card__credit_card_id=card_id)
+                        .order_by("-discount_percentage", "-valid_to", "-id")
+                    )
+            except (FieldError, AttributeError):
+                # available_on_cards doesn't exist, use fallback
+                qs = (
+                    partners_qs.filter(partner_card__credit_card_id=card_id)
+                    .order_by("-discount_percentage", "-valid_to", "-id")
+                )
             
             # Additional safety check: verify each offer is actually linked to this card
             # This prevents showing offers that might have been incorrectly included
@@ -477,7 +561,22 @@ class SmartRecommendationsView(APIView):
             seen_offers = set()  # Track seen offers to prevent duplicates
             
             for o in qs[:20]:  # Get more to filter and deduplicate
-                if not (o.partner_card and o.partner_card.credit_card_id == card_id):
+                # Verify offer is linked to this card via available_on_cards or partner_card
+                is_linked = False
+                if partner_card_ids:
+                    # Check if any of the card's PartnerCards are in available_on_cards
+                    try:
+                        if hasattr(o, 'available_on_cards'):
+                            offer_card_ids = list(o.available_on_cards.filter(id__in=partner_card_ids).values_list('id', flat=True))
+                            is_linked = len(offer_card_ids) > 0
+                    except (AttributeError, Exception):
+                        pass
+                
+                # Fallback check: verify via partner_card
+                if not is_linked:
+                    is_linked = (o.partner_card and o.partner_card.credit_card_id == card_id)
+                
+                if not is_linked:
                     continue
                 
                 # Create deduplication key

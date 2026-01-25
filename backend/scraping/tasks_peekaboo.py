@@ -1311,8 +1311,19 @@ def process_peekaboo_deals(deals_list: list, city: dict, bank_code: str = None, 
                             end_date = timezone.now() + timedelta(days=365)  # Default 1 year
                     except Exception as e:
                         logger.warning(f"Error parsing dates for deal {deal_id}: {str(e)}")
+                        # Ensure timezone-aware datetimes (timezone.now() already returns aware datetime)
                         start_date = timezone.now()
                         end_date = timezone.now() + timedelta(days=365)
+                        
+                        # Double-check: ensure both are timezone-aware
+                        if start_date.tzinfo is None:
+                            from django.utils.timezone import make_aware
+                            import pytz
+                            start_date = make_aware(start_date, pytz.UTC)
+                        if end_date.tzinfo is None:
+                            from django.utils.timezone import make_aware
+                            import pytz
+                            end_date = make_aware(end_date, pytz.UTC)
                     
                     # Get source entity info
                     source_entity_id_api = deal_data.get('sourceEntityId')

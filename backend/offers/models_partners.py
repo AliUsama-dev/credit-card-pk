@@ -56,6 +56,10 @@ class PartnerCard(models.Model):
     # Card type
     card_type = models.CharField(max_length=50, blank=True, null=True)  # CREDIT, DEBIT, etc.
     
+    # Peekaboo association IDs (from associations array in API)
+    peekaboo_association_id = models.BigIntegerField(null=True, blank=True, help_text="Association ID from Peekaboo API for this card")
+    peekaboo_association_type_id = models.BigIntegerField(null=True, blank=True, db_index=True, help_text="Association Type ID from Peekaboo API for this card")
+    
     # Metadata
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -112,6 +116,16 @@ class PartnerOffer(models.Model):
     
     # Source URL
     source_url = models.URLField(blank=True, null=True)
+    
+    # Available On Cards (ManyToMany relationship)
+    # This stores which PartnerCard objects this offer is available on
+    # Based on the "associations" array from the Peekaboo API
+    available_on_cards = models.ManyToManyField(
+        PartnerCard,
+        blank=True,
+        related_name='available_offers',
+        help_text="Cards this offer is available on (from 'associations' array in Peekaboo API)"
+    )
     
     # Metadata
     is_active = models.BooleanField(default=True)

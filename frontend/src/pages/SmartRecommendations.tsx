@@ -188,7 +188,6 @@ const SmartRecommendations: React.FC = () => {
                       {best.card.bank.name} • Category: {selectedCategory} • City: {selectedCity}
                     </Typography>
                   </Box>
-                  <Chip color="success" label={`Score: ${best.score.toFixed(2)}`} />
                 </Stack>
 
                 <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ mb: 2 }}>
@@ -197,14 +196,6 @@ const SmartRecommendations: React.FC = () => {
                       icon={<LocalOffer />}
                       label={`Partners: ${best.metrics.partners_best_offer_pct.toFixed(0)}%`}
                       color="success"
-                      size="small"
-                    />
-                  )}
-                  {best.metrics.peekaboo_best_offer_pct > 0 && (
-                    <Chip
-                      icon={<LocalOffer />}
-                      label={`Peekaboo: ${best.metrics.peekaboo_best_offer_pct.toFixed(0)}%`}
-                      color="info"
                       size="small"
                     />
                   )}
@@ -329,16 +320,10 @@ const SmartRecommendations: React.FC = () => {
                           {row.metrics.partners_best_offer_pct > 0 && (
                             <Chip size="small" color="success" label={`Partners ${row.metrics.partners_best_offer_pct.toFixed(0)}%`} />
                           )}
-                          {row.metrics.peekaboo_best_offer_pct > 0 && (
-                            <Chip size="small" color="info" label={`Peekaboo ${row.metrics.peekaboo_best_offer_pct.toFixed(0)}%`} />
-                          )}
                           {row.metrics.base_cashback_pct > 0 && (
                             <Chip size="small" label={`Cashback ${row.metrics.base_cashback_pct.toFixed(1)}%`} />
                           )}
                         </Stack>
-                        <Typography variant="body2" fontWeight={700}>
-                          Score: {row.score.toFixed(2)}
-                        </Typography>
 
                         {/* Small preview (top 2 offers) */}
                         {row.top_offers && row.top_offers.length > 0 && (

@@ -2,14 +2,36 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
-try:
-    # Optional: if installed, load .env automatically in local dev
-    from dotenv import load_dotenv  # type: ignore
-    load_dotenv()
-except Exception:
-    pass
-
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load .env file manually if python-dotenv is not available
+env_path = BASE_DIR / '.env'
+if env_path.exists():
+    try:
+        # Try using python-dotenv if available
+        from dotenv import load_dotenv
+        load_dotenv(env_path)
+        print(f"✅ Loaded .env from: {env_path} (using python-dotenv)")
+    except ImportError:
+        # Fallback: manually parse .env file
+        print(f"⚠️  python-dotenv not installed, manually loading .env from: {env_path}")
+        try:
+            with open(env_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    # Skip comments and empty lines
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        # Only set if not already in environment
+                        if key and value and key not in os.environ:
+                            os.environ[key] = value
+            print(f"✅ Manually loaded .env file")
+        except Exception as e:
+            print(f"⚠️  Could not load .env manually: {e}")
+    except Exception as e:
+        print(f"⚠️  Could not load .env: {e}")
 
 # Media settings
 MEDIA_URL = '/media/'

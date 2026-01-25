@@ -8,6 +8,7 @@ from django.utils import timezone
 from django.db import transaction
 from django.db.utils import OperationalError
 from django.db import connection
+from django.db.models import Q
 from cards.models import Bank, CreditCard
 from offers.models_partners import PartnerBank, PartnerCard, PartnerOffer
 from .scrapers.partners_scraper import PartnersOffersScraper
@@ -250,65 +251,154 @@ def scrape_partner_bank_detail(partner_bank_id: int, city: str = 'karachi'):
                 cards_created += 1
             else:
                 cards_updated += 1
-            
-            # Process offers for this card (only offers linked to this card)
-            card_offers = [
-                o for o in bank_data.get('offers', [])
-                if o.get('card_name') == card_data['name'] or o.get('card_slug') == card_data.get('slug')
-            ]
-            
-            # Process offers in batches to avoid long transactions
-            for offer_idx, offer_data in enumerate(card_offers):
-                try:
-                    # NOTE: Avoid fixed sleeps; rely on retry/backoff when locks happen.
-                    
-                    def _process_offer():
-                        with transaction.atomic():
-                            # Use source_url as primary identifier if available, otherwise use title + merchant
-                            lookup_kwargs = {
-                                'partner_bank': partner_bank,
-                                'partner_card': partner_card,
-                            }
-                            
-                            if offer_data.get('source_url'):
-                                lookup_kwargs['source_url'] = offer_data['source_url']
-                            else:
-                                lookup_kwargs['title'] = offer_data['title']
-                                lookup_kwargs['merchant_name'] = offer_data.get('merchant_name', '')[:200]
-                            
-                            partner_offer, created = PartnerOffer.objects.update_or_create(
-                                **lookup_kwargs,
-                                defaults={
-                                    'title': offer_data['title'],
-                                    'description': offer_data.get('description', ''),
-                                    'discount_percentage': offer_data.get('discount_percentage'),
-                                    'discount_amount': offer_data.get('discount_amount'),
-                                    'merchant_name': offer_data.get('merchant_name', '')[:200],
-                                    'merchant_logo': offer_data.get('merchant_logo', ''),
-                                    'image': offer_data.get('image', ''),
-                                    'category': offer_data.get('category', ''),
-                                    'city': city.upper(),
-                                    'source_url': offer_data.get('source_url', ''),
-                                    'terms_conditions': offer_data.get('terms_conditions', ''),
-                                    'last_scraped_at': timezone.now(),
-                                }
-                            )
-                            
-                            return created
-                    
-                    offer_created = _retry_db_operation(_process_offer)
-                    
-                    if offer_created:
-                        offers_created += 1
-                    else:
-                        offers_updated += 1
-                        
-                except Exception as e:
-                    logger.error(f"Error processing offer: {str(e)}")
-                    continue
                 
         except Exception as e:
             logger.error(f"Error processing card {card_data.get('name', 'Unknown')}: {str(e)}")
+            continue
+    
+    # CRITICAL: Process ALL offers from the bank (not per card)
+    # Each offer should be linked to ALL cards in its associations array
+    # This ensures when user selects a card, only offers with that card in associations are shown
+    logger.info(f"Processing {len(bank_data.get('offers', []))} offers for {partner_bank.name}...")
+    
+    # Deduplicate offers by deal_id (same deal can appear in multiple card scrapes)
+    offers_by_deal_id = {}
+    for offer_data in bank_data.get('offers', []):
+        deal_id = offer_data.get('deal_id')
+        if deal_id:
+            # Use deal_id as key - same deal should only be stored once
+            if deal_id not in offers_by_deal_id:
+                offers_by_deal_id[deal_id] = offer_data
+            else:
+                # Merge associations if deal already exists
+                existing = offers_by_deal_id[deal_id]
+                existing_associations = existing.get('available_on_associations', [])
+                new_associations = offer_data.get('available_on_associations', [])
+                # Combine unique associations
+                all_associations = existing_associations + new_associations
+                # Deduplicate by typeId
+                seen_type_ids = set()
+                unique_associations = []
+                for assoc in all_associations:
+                    type_id = assoc.get('typeId')
+                    if type_id and type_id not in seen_type_ids:
+                        seen_type_ids.add(type_id)
+                        unique_associations.append(assoc)
+                existing['available_on_associations'] = unique_associations
+                # Update card names/typeIds/slugs from unique associations
+                existing['available_on_card_names'] = [a.get('name') for a in unique_associations if a.get('name')]
+                existing['available_on_card_type_ids'] = [a.get('typeId') for a in unique_associations if a.get('typeId')]
+                existing['available_on_card_slugs'] = [a.get('slug') for a in unique_associations if a.get('slug')]
+        else:
+            # No deal_id - use source_url as key
+            source_url = offer_data.get('source_url', '')
+            if source_url and source_url not in offers_by_deal_id:
+                offers_by_deal_id[source_url] = offer_data
+    
+    # Process each unique offer
+    for offer_key, offer_data in offers_by_deal_id.items():
+        try:
+            def _process_offer():
+                with transaction.atomic():
+                    # Find ALL PartnerCards that match cards in this offer's associations array
+                    available_on_card_names = offer_data.get('available_on_card_names', [])
+                    available_on_card_type_ids = offer_data.get('available_on_card_type_ids', [])
+                    available_on_card_slugs = offer_data.get('available_on_card_slugs', [])
+                    
+                    # Find matching PartnerCards by name, typeId, or slug
+                    matching_partner_cards = PartnerCard.objects.filter(
+                        partner_bank=partner_bank,
+                        is_active=True
+                    ).filter(
+                        Q(name__in=available_on_card_names) |
+                        Q(peekaboo_association_type_id__in=available_on_card_type_ids) |
+                        Q(slug__in=available_on_card_slugs)
+                    ).distinct()
+                    
+                    # If no matches found, try to match by the card_name from offer (backward compatibility)
+                    if not matching_partner_cards.exists():
+                        card_name = offer_data.get('card_name')
+                        if card_name:
+                            matching_partner_cards = PartnerCard.objects.filter(
+                                partner_bank=partner_bank,
+                                name=card_name,
+                                is_active=True
+                            )
+                    
+                    # Use first matching card as default partner_card (for backward compatibility)
+                    default_partner_card = matching_partner_cards.first()
+                    
+                    # Use deal_id or source_url as primary identifier
+                    lookup_kwargs = {
+                        'partner_bank': partner_bank,
+                    }
+                    
+                    deal_id = offer_data.get('deal_id')
+                    if deal_id:
+                        # Extract dealId from source_url if not in offer_data
+                        source_url = offer_data.get('source_url', '')
+                        if source_url and 'dealId=' in source_url:
+                            import re
+                            match = re.search(r'dealId=([^&]+)', source_url)
+                            if match:
+                                deal_id_from_url = match.group(1).strip()
+                                if deal_id_from_url:
+                                    lookup_kwargs['source_url__icontains'] = f'dealId={deal_id_from_url}'
+                    elif offer_data.get('source_url'):
+                        lookup_kwargs['source_url'] = offer_data['source_url']
+                    else:
+                        lookup_kwargs['title'] = offer_data['title']
+                        lookup_kwargs['merchant_name'] = offer_data.get('merchant_name', '')[:200]
+                    
+                    # Add default partner_card to lookup if available
+                    if default_partner_card:
+                        lookup_kwargs['partner_card'] = default_partner_card
+                    
+                    partner_offer, created = PartnerOffer.objects.update_or_create(
+                        **lookup_kwargs,
+                        defaults={
+                            'title': offer_data['title'],
+                            'description': offer_data.get('description', ''),
+                            'discount_percentage': offer_data.get('discount_percentage'),
+                            'discount_amount': offer_data.get('discount_amount'),
+                            'merchant_name': offer_data.get('merchant_name', '')[:200],
+                            'merchant_logo': offer_data.get('merchant_logo', ''),
+                            'image': offer_data.get('image', ''),
+                            'category': offer_data.get('category', ''),
+                            'city': city.upper(),
+                            'source_url': offer_data.get('source_url', ''),
+                            'terms_conditions': offer_data.get('terms_conditions', ''),
+                            'last_scraped_at': timezone.now(),
+                        }
+                    )
+                    
+                    # CRITICAL: Link offer to ALL cards in associations array via available_on_cards ManyToMany
+                    try:
+                        if hasattr(PartnerOffer, 'available_on_cards'):
+                            # Clear existing associations and set new ones
+                            partner_offer.available_on_cards.clear()
+                            if matching_partner_cards.exists():
+                                partner_offer.available_on_cards.set(matching_partner_cards)
+                                logger.debug(f"Linked offer '{offer_data.get('title', '')[:50]}' to {matching_partner_cards.count()} cards via associations")
+                            else:
+                                # Fallback: if no matches found, link to default card if available
+                                if default_partner_card:
+                                    partner_offer.available_on_cards.add(default_partner_card)
+                                    logger.debug(f"Linked offer '{offer_data.get('title', '')[:50]}' to default card '{default_partner_card.name}'")
+                    except (AttributeError, Exception) as e:
+                        logger.warning(f"Could not set available_on_cards for offer: {str(e)}")
+                    
+                    return created
+            
+            offer_created = _retry_db_operation(_process_offer)
+            
+            if offer_created:
+                offers_created += 1
+            else:
+                offers_updated += 1
+                
+        except Exception as e:
+            logger.error(f"Error processing offer: {str(e)}")
             continue
     
     logger.info(f"Scraped {partner_bank.name}: {cards_created} cards created, {cards_updated} updated, "

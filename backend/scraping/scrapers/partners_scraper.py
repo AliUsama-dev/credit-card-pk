@@ -1,6 +1,7 @@
 # scraping/scrapers/partners_scraper.py
 # Scraper for Peekaboo Partners Offers (bank detail pages)
 
+from datetime import time
 import json
 import logging
 import re
@@ -453,6 +454,46 @@ class PartnersOffersScraper:
                                 if isinstance(category, dict):
                                     category = category.get('name', '') or category.get('categoryName', '') or ''
                                 
+                                # CRITICAL: Extract associations array - this tells us which cards this deal is available on
+                                # The associations array contains cards like:
+                                # [{"typeId": 640, "name": "Askari Classic Credit Card", ...}, ...]
+                                associations = deal.get('associations', [])
+                                if not isinstance(associations, list):
+                                    associations = []
+                                
+                                # Extract card names and typeIds from associations for linking
+                                available_on_card_names = []
+                                available_on_card_type_ids = []
+                                available_on_card_slugs = []
+                                available_on_associations = []
+                                
+                                for assoc in associations:
+                                    if isinstance(assoc, dict):
+                                        card_name = assoc.get('name', '')
+                                        type_id = assoc.get('typeId')
+                                        source_entity_association_id = assoc.get('sourceEntityAssociationId')
+                                        
+                                        if card_name:
+                                            available_on_card_names.append(card_name)
+                                        if type_id:
+                                            available_on_card_type_ids.append(type_id)
+                                        
+                                        # Try to extract slug from card name or use a generated one
+                                        card_slug = assoc.get('slug', '')
+                                        if not card_slug and card_name:
+                                            # Generate slug from name (similar to how we do it elsewhere)
+                                            card_slug = self._slugify(card_name)
+                                        if card_slug:
+                                            available_on_card_slugs.append(card_slug)
+                                        
+                                        # Store full association data for matching
+                                        available_on_associations.append({
+                                            'typeId': type_id,
+                                            'name': card_name,
+                                            'slug': card_slug,
+                                            'sourceEntityAssociationId': source_entity_association_id,
+                                        })
+                                
                                 offer_data = {
                                     'title': deal.get('title', ''),
                                     'description': deal.get('description', ''),
@@ -464,7 +505,14 @@ class PartnersOffersScraper:
                                     'category': category,
                                     'source_url': source_url,
                                     'terms_conditions': deal.get('terms', '') or deal.get('termsConditions', ''),
-                                    'card_name': card_data['name'],  # Link offer to card
+                                    'deal_id': deal_id,  # Store dealId for deduplication
+                                    # CRITICAL: Store associations data for linking to multiple cards
+                                    'available_on_card_names': available_on_card_names,
+                                    'available_on_card_type_ids': available_on_card_type_ids,
+                                    'available_on_card_slugs': available_on_card_slugs,
+                                    'available_on_associations': available_on_associations,
+                                    # Keep card_name for backward compatibility (but we'll link to all cards in associations)
+                                    'card_name': card_data['name'],
                                     'card_slug': card_data['slug'],
                                 }
                                 bank_data['offers'].append(offer_data)

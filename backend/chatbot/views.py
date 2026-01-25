@@ -16,13 +16,19 @@ from django.conf import settings
 import logging
 logger = logging.getLogger(__name__)
 
-api_key = os.getenv('OPENAI_API_KEY') or getattr(settings, 'OPENAI_API_KEY', '')
+# Get API key from settings (which loads from .env)
+api_key = getattr(settings, 'OPENAI_API_KEY', '') or os.getenv('OPENAI_API_KEY', '')
 if api_key:
-    client = OpenAI(api_key=api_key)
-    logger.info("OpenAI client initialized successfully")
+    try:
+        client = OpenAI(api_key=api_key)
+        logger.info("✅ OpenAI client initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize OpenAI client: {str(e)}")
+        client = None
 else:
     client = None
-    logger.warning("OpenAI API key not found. Chatbot functionality will not work.")
+    logger.warning("⚠️  OpenAI API key not found. Chatbot functionality will not work.")
+    logger.warning(f"   Checked: settings.OPENAI_API_KEY={getattr(settings, 'OPENAI_API_KEY', 'NOT_SET')[:10]}..., os.getenv={os.getenv('OPENAI_API_KEY', 'NOT_SET')[:10]}...")
 
 class ChatbotView(APIView):
     permission_classes = [permissions.IsAuthenticated]
