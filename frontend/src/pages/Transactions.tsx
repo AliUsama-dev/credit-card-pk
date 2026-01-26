@@ -32,8 +32,6 @@ import {
   DialogActions,
   LinearProgress,
   Divider,
-  Tabs,
-  Tab,
   alpha,
   useTheme,
 } from '@mui/material';
@@ -50,8 +48,6 @@ import {
   CalendarToday,
   CreditCard as CreditCardIcon,
   FileDownload,
-  Assessment,
-  PieChart,
   Receipt,
   CheckCircle,
   Cancel,
@@ -61,14 +57,13 @@ import {
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
-import { transactionsService, Transaction, SavingsAnalysis, SpendingCategory, TransactionFilters } from '../services/transactions';
+import { transactionsService, Transaction, TransactionFilters } from '../services/transactions';
 import { cardService, UserCard } from '../services/cards';
 import { format } from 'date-fns';
 
 const Transactions: React.FC = () => {
   const theme = useTheme();
   const queryClient = useQueryClient();
-  const [selectedTab, setSelectedTab] = useState(0);
   const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedCardId, setSelectedCardId] = useState<number | ''>('');
@@ -140,27 +135,6 @@ const Transactions: React.FC = () => {
   } = useQuery({
     queryKey: ['transactions', filters],
     queryFn: () => transactionsService.getTransactions(getApiFilters()),
-    enabled: selectedTab === 0,
-  });
-
-  // Fetch savings analysis
-  const {
-    data: savingsAnalysis,
-    isLoading: savingsLoading,
-  } = useQuery({
-    queryKey: ['savings-analysis', 30],
-    queryFn: () => transactionsService.getSavingsAnalysis(30),
-    enabled: selectedTab === 1,
-  });
-
-  // Fetch spending categories
-  const {
-    data: spendingCategories,
-    isLoading: categoriesLoading,
-  } = useQuery({
-    queryKey: ['spending-categories', 30],
-    queryFn: () => transactionsService.getSpendingCategories(30),
-    enabled: selectedTab === 2,
   });
 
   // Upload mutation
@@ -170,8 +144,6 @@ const Transactions: React.FC = () => {
     onSuccess: (data) => {
       toast.success(`Successfully uploaded! Parsed ${data.transactions.length} transactions`);
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
-      queryClient.invalidateQueries({ queryKey: ['savings-analysis'] });
-      queryClient.invalidateQueries({ queryKey: ['spending-categories'] });
       setUploadDialogOpen(false);
       setSelectedFile(null);
       setSelectedCardId('');
@@ -332,26 +304,6 @@ const Transactions: React.FC = () => {
             </Button>
           </Stack>
         </Stack>
-
-        {/* Tabs */}
-        <Paper sx={{ borderRadius: 3, mb: 3, overflow: 'hidden' }}>
-          <Tabs
-            value={selectedTab}
-            onChange={(e, newValue) => setSelectedTab(newValue)}
-            sx={{
-              '& .MuiTab-root': {
-                textTransform: 'none',
-                fontWeight: 600,
-                fontSize: '1rem',
-                py: 2,
-              },
-            }}
-          >
-            <Tab icon={<Receipt sx={{ mb: 0.5 }} />} iconPosition="start" label="All Transactions" />
-            <Tab icon={<Assessment sx={{ mb: 0.5 }} />} iconPosition="start" label="Savings Analysis" />
-            <Tab icon={<PieChart sx={{ mb: 0.5 }} />} iconPosition="start" label="Spending Categories" />
-          </Tabs>
-        </Paper>
       </Box>
 
       {/* Upload Dialog */}
@@ -472,9 +424,8 @@ const Transactions: React.FC = () => {
         </DialogActions>
       </Dialog>
 
-      {/* Content based on selected tab */}
-      {selectedTab === 0 && (
-        <>
+      {/* Transactions Content */}
+      <>
           {/* Filters */}
           <Paper sx={{ p: 3, mb: 3, borderRadius: 3 }}>
             <Grid container spacing={2}>
@@ -751,261 +702,7 @@ const Transactions: React.FC = () => {
               )}
             </>
           )}
-        </>
-      )}
-
-      {/* Savings Analysis Tab */}
-      {selectedTab === 1 && (
-        <>
-          {savingsLoading ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-              <CircularProgress />
-            </Box>
-          ) : savingsAnalysis ? (
-            <Grid container spacing={3}>
-              {/* Summary Cards */}
-              <Grid item xs={12} md={6}>
-                <Card sx={{ borderRadius: 3, p: 3, height: '100%' }}>
-                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 3 }}>
-                    Savings Overview (Last 30 Days)
-                  </Typography>
-                  <Stack spacing={2}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Typography variant="body1" color="text.secondary">Total Spent</Typography>
-                      <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                        {formatCurrency(savingsAnalysis.total_spent)}
-                      </Typography>
-                    </Box>
-                    <Divider />
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Typography variant="body1" color="text.secondary">Savings Earned (% OFF)</Typography>
-                      <Typography variant="h6" sx={{ fontWeight: 700, color: 'success.main' }}>
-                        {formatCurrency(savingsAnalysis.total_reward_earned)}
-                      </Typography>
-                    </Box>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Typography variant="body1" color="text.secondary">Potential Savings (% OFF)</Typography>
-                      <Typography variant="h6" sx={{ fontWeight: 700, color: 'info.main' }}>
-                        {formatCurrency(savingsAnalysis.total_potential_reward)}
-                      </Typography>
-                    </Box>
-                    <Divider />
-                    <Box
-                      sx={{
-                        p: 2,
-                        borderRadius: 2,
-                        bgcolor: alpha(theme.palette.error.main, 0.1),
-                        border: `2px solid ${alpha(theme.palette.error.main, 0.2)}`,
-                      }}
-                    >
-                      <Stack direction="row" justifyContent="space-between" alignItems="center">
-                        <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                          Missed Savings
-                        </Typography>
-                        <Typography variant="h5" sx={{ fontWeight: 800, color: 'error.main' }}>
-                          {formatCurrency(savingsAnalysis.total_missed_savings)}
-                        </Typography>
-                      </Stack>
-                    </Box>
-                    <Box
-                      sx={{
-                        p: 2,
-                        borderRadius: 2,
-                        bgcolor: alpha(theme.palette.success.main, 0.1),
-                        border: `2px solid ${alpha(theme.palette.success.main, 0.2)}`,
-                      }}
-                    >
-                      <Stack direction="row" justifyContent="space-between" alignItems="center">
-                        <Typography variant="body1" sx={{ fontWeight: 600 }}>
-                          Projected Annual Savings
-                        </Typography>
-                        <Typography variant="h5" sx={{ fontWeight: 800, color: 'success.main' }}>
-                          {formatCurrency(savingsAnalysis.projected_annual_savings)}
-                        </Typography>
-                      </Stack>
-                    </Box>
-                  </Stack>
-                </Card>
-              </Grid>
-
-              {/* Category Breakdown */}
-              <Grid item xs={12} md={6}>
-                <Card sx={{ borderRadius: 3, p: 3, height: '100%' }}>
-                  <Typography variant="h6" sx={{ fontWeight: 700, mb: 3 }}>
-                    Savings by Category
-                  </Typography>
-                  <Stack spacing={2}>
-                    {Object.entries(savingsAnalysis.by_category).map(([code, data]) => (
-                      <Box key={code}>
-                        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-                          <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                            {data.name}
-                          </Typography>
-                          <Chip
-                            label={formatCurrency(data.missed_savings)}
-                            size="small"
-                            color={data.missed_savings > 0 ? 'error' : 'success'}
-                            sx={{ fontWeight: 700 }}
-                          />
-                        </Stack>
-                        <LinearProgress
-                          variant="determinate"
-                          value={(data.missed_savings / savingsAnalysis.total_missed_savings) * 100}
-                          sx={{
-                            height: 8,
-                            borderRadius: 4,
-                            bgcolor: alpha(theme.palette.error.main, 0.1),
-                            '& .MuiLinearProgress-bar': {
-                              bgcolor: data.missed_savings > 0 ? 'error.main' : 'success.main',
-                            },
-                          }}
-                        />
-                        <Stack direction="row" justifyContent="space-between" sx={{ mt: 0.5 }}>
-                          <Typography variant="caption" color="text.secondary">
-                            Spent: {formatCurrency(data.total_spent)}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {data.transaction_count} transactions
-                          </Typography>
-                        </Stack>
-                      </Box>
-                    ))}
-                  </Stack>
-                </Card>
-              </Grid>
-
-              {/* Recommendations */}
-              {savingsAnalysis.recommended_actions.length > 0 && (
-                <Grid item xs={12}>
-                  <Card sx={{ borderRadius: 3, p: 3 }}>
-                    <Typography variant="h6" sx={{ fontWeight: 700, mb: 3 }}>
-                      Top Recommendations
-                    </Typography>
-                    <Stack spacing={2}>
-                      {savingsAnalysis.recommended_actions.map((action, idx) => (
-                        <Paper
-                          key={idx}
-                          sx={{
-                            p: 2,
-                            borderRadius: 2,
-                            border: `1px solid ${alpha(theme.palette.error.main, 0.2)}`,
-                            bgcolor: alpha(theme.palette.error.main, 0.05),
-                          }}
-                        >
-                          <Stack direction="row" justifyContent="space-between" alignItems="center">
-                            <Box>
-                              <Typography variant="body1" sx={{ fontWeight: 700, mb: 0.5 }}>
-                                {action.merchant}
-                              </Typography>
-                              <Typography variant="body2" color="text.secondary">
-                                {action.category} • {format(new Date(action.date), 'MMM dd, yyyy')} • {formatCurrency(action.amount)}
-                              </Typography>
-                              <Typography variant="body2" sx={{ mt: 1, fontWeight: 600 }}>
-                                Use <strong>{action.recommended_card}</strong> instead
-                              </Typography>
-                            </Box>
-                            <Chip
-                              icon={<TrendingDown />}
-                              label={`Missed: ${formatCurrency(action.missed_savings)}`}
-                              color="error"
-                              sx={{ fontWeight: 700, fontSize: '0.9rem' }}
-                            />
-                          </Stack>
-                        </Paper>
-                      ))}
-                    </Stack>
-                  </Card>
-                </Grid>
-              )}
-            </Grid>
-          ) : (
-            <Paper sx={{ p: 8, textAlign: 'center', borderRadius: 3 }}>
-              <Assessment sx={{ fontSize: 80, color: 'text.secondary', mb: 2, opacity: 0.5 }} />
-              <Typography variant="h5" sx={{ mb: 2, fontWeight: 700 }}>
-                No Analysis Available
-              </Typography>
-              <Typography variant="body1" color="text.secondary">
-                Upload transactions to see savings analysis.
-              </Typography>
-            </Paper>
-          )}
-        </>
-      )}
-
-      {/* Spending Categories Tab */}
-      {selectedTab === 2 && (
-        <>
-          {categoriesLoading ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-              <CircularProgress />
-            </Box>
-          ) : spendingCategories && spendingCategories.length > 0 ? (
-            <Grid container spacing={3}>
-              {spendingCategories.map((category) => (
-                <Grid item xs={12} sm={6} md={4} key={category.code}>
-                  <Card
-                    sx={{
-                      borderRadius: 3,
-                      p: 3,
-                      height: '100%',
-                      border: `2px solid ${alpha(getCategoryColor(category.code), 0.2)}`,
-                      background: `linear-gradient(180deg, ${alpha(getCategoryColor(category.code), 0.05)} 0%, transparent 100%)`,
-                      transition: 'all 0.2s ease',
-                      '&:hover': {
-                        transform: 'translateY(-4px)',
-                        boxShadow: `0 8px 24px ${alpha(getCategoryColor(category.code), 0.2)}`,
-                      },
-                    }}
-                  >
-                    <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-                      <Chip
-                        label={category.name}
-                        sx={{
-                          bgcolor: alpha(getCategoryColor(category.code), 0.2),
-                          color: getCategoryColor(category.code),
-                          fontWeight: 700,
-                        }}
-                      />
-                      <Typography variant="h6" sx={{ fontWeight: 800 }}>
-                        {category.percentage}%
-                      </Typography>
-                    </Stack>
-                    <Typography variant="h4" sx={{ fontWeight: 800, mb: 1 }}>
-                      {formatCurrency(category.amount)}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {category.transaction_count} transactions
-                    </Typography>
-                    <LinearProgress
-                      variant="determinate"
-                      value={category.percentage}
-                      sx={{
-                        mt: 2,
-                        height: 8,
-                        borderRadius: 4,
-                        bgcolor: alpha(getCategoryColor(category.code), 0.1),
-                        '& .MuiLinearProgress-bar': {
-                          bgcolor: getCategoryColor(category.code),
-                        },
-                      }}
-                    />
-                  </Card>
-                </Grid>
-              ))}
-            </Grid>
-          ) : (
-            <Paper sx={{ p: 8, textAlign: 'center', borderRadius: 3 }}>
-              <PieChart sx={{ fontSize: 80, color: 'text.secondary', mb: 2, opacity: 0.5 }} />
-              <Typography variant="h5" sx={{ mb: 2, fontWeight: 700 }}>
-                No Spending Data
-              </Typography>
-              <Typography variant="body1" color="text.secondary">
-                Upload transactions to see spending categories.
-              </Typography>
-            </Paper>
-          )}
-        </>
-      )}
+      </>
     </Container>
   );
 };

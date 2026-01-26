@@ -237,7 +237,10 @@ const SmartRecommendations: React.FC = () => {
                       Top Deals for this Card
                     </Typography>
                     <Grid container spacing={2}>
-                      {best.top_offers.slice(0, 8).map((offer, idx) => (
+                      {best.top_offers
+                        .filter((offer) => offer.source === 'PARTNERS') // Only show Partners offers
+                        .slice(0, 8)
+                        .map((offer, idx) => (
                         <Grid item xs={12} sm={6} md={4} lg={3} key={`${offer.source}-${idx}`}>
                           <Card sx={{ borderRadius: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
                             <CardActionArea
@@ -259,8 +262,8 @@ const SmartRecommendations: React.FC = () => {
                                 <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }} flexWrap="wrap">
                                   <Chip
                                     size="small"
-                                    color={offer.source === 'PARTNERS' ? 'success' : 'info'}
-                                    label={offer.source}
+                                    color="success"
+                                    label="PARTNERS"
                                   />
                                   {offer.discount_percentage ? (
                                     <Chip size="small" color="success" label={`${Number(offer.discount_percentage).toFixed(0)}% OFF`} />

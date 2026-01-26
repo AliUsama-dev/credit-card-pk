@@ -163,7 +163,6 @@ class SmartRecommendationsView(APIView):
 
         # Import models lazily (keeps app boot resilient)
         from cards.models import CreditCard, UserCard
-        from offers.models_peekaboo import PeekabooDeal
         from offers.models_partners import PartnerOffer
 
         # User cards
@@ -186,41 +185,7 @@ class SmartRecommendationsView(APIView):
 
         cards = list(CreditCard.objects.filter(id__in=card_ids).select_related("bank"))
         
-        # Peekaboo offers: best percentage_value per card + count
-        # IMPORTANT: ONLY show deals for the selected category (no fallback to all offers)
-        base_deal_filter = Q(is_active=True, is_expired=False) & Q(linked_cards__id__in=card_ids)
-        
-        # Apply category filter - REQUIRED, no fallback
-        if category:
-            category_filter = _category_q("category", category) | _category_q("title", category)
-            peekaboo_qs = PeekabooDeal.objects.filter(base_deal_filter & category_filter).distinct()
-        else:
-            # Should not happen (category is required), but handle gracefully
-            peekaboo_qs = PeekabooDeal.objects.none()
-        
-        # Apply city filter if provided
-        if city_upper:
-            if peekaboo_qs.filter(city__iexact=city_upper).exists():
-                peekaboo_qs = peekaboo_qs.filter(city__iexact=city_upper)
-            # Note: We don't fall back to all cities - only show deals for selected city if available
-
-        peekaboo_best_by_card: Dict[int, float] = {}
-        peekaboo_count_by_card: Dict[int, int] = {}
-        # Aggregate max percentage per card
-        for row in (
-            peekaboo_qs.values("linked_cards__id")
-            .annotate(best_pct=Max("percentage_value"))
-        ):
-            cid = row.get("linked_cards__id")
-            if cid:
-                peekaboo_best_by_card[int(cid)] = _safe_float(row.get("best_pct"))
-        # Count per card
-        for row in peekaboo_qs.values("linked_cards__id").annotate(cnt=Max("id")):
-            # cheap way: we'll just compute counts via python below; keep DB load simple
-            pass
-        # python counts (safer because M2M can duplicate rows)
-        for cid in card_ids:
-            peekaboo_count_by_card[cid] = peekaboo_qs.filter(linked_cards__id=cid).distinct().count()
+        # NOTE: Peekaboo offers removed - only showing Partners offers as requested
 
         # Partners offers: best discount_percentage per credit_card_id + count
         # IMPORTANT: ONLY show deals for the selected category (no fallback to all offers)
@@ -277,7 +242,8 @@ class SmartRecommendationsView(APIView):
         partners_best_by_card: Dict[int, float] = {}
         partners_count_by_card: Dict[int, int] = {}
         
-        # Count offers per card using available_on_cards if available, otherwise use partner_card__credit_card_id
+        # CRITICAL: Count offers per card using ONLY available_on_cards (associations array)
+        # NO FALLBACK - only count offers where card is explicitly in associations
         try:
             from offers.models_partners import PartnerCard
             for cid in card_ids:
@@ -288,8 +254,9 @@ class SmartRecommendationsView(APIView):
                 )
                 partner_card_ids = list(partner_cards.values_list('id', flat=True))
                 
+                # CRITICAL: Only count if PartnerCards found (can verify associations)
                 if partner_card_ids:
-                    # Filter offers where this card is in available_on_cards
+                    # Filter offers where this card is in available_on_cards (associations array)
                     card_offers = partners_qs.filter(available_on_cards__id__in=partner_card_ids).distinct()
                     partners_count_by_card[cid] = card_offers.count()
                     # Get best discount percentage for this card
@@ -297,229 +264,22 @@ class SmartRecommendationsView(APIView):
                     if best_pct:
                         partners_best_by_card[cid] = _safe_float(best_pct)
                 else:
-                    # Fallback to partner_card__credit_card_id
-                    card_offers = partners_qs.filter(partner_card__credit_card_id=cid)
-                    partners_count_by_card[cid] = card_offers.count()
-                    best_pct = card_offers.aggregate(best=Max("discount_percentage")).get("best")
-                    if best_pct:
-                        partners_best_by_card[cid] = _safe_float(best_pct)
+                    # No PartnerCards found - can't verify associations, set to 0
+                    partners_count_by_card[cid] = 0
+                    partners_best_by_card[cid] = 0.0
         except (FieldError, AttributeError):
-            # Fallback to old method if available_on_cards doesn't exist
-            for row in (
-                partners_qs.values("partner_card__credit_card_id")
-                .annotate(best_pct=Max("discount_percentage"))
-            ):
-                cid = row.get("partner_card__credit_card_id")
-                if cid:
-                    partners_best_by_card[int(cid)] = _safe_float(row.get("best_pct"))
+            # available_on_cards field doesn't exist - can't verify associations, set all to 0
             for cid in card_ids:
-                partners_count_by_card[cid] = partners_qs.filter(partner_card__credit_card_id=cid).count()
+                partners_count_by_card[cid] = 0
+                partners_best_by_card[cid] = 0.0
 
         def _peekaboo_top_offers_for_card(card_id: int) -> List[Dict[str, Any]]:
-            # CRITICAL: Only show deals that are ACTUALLY linked to this specific card
-            # Filter by card_id and ensure card_id is in user's card_ids
-            if card_id not in card_ids:
-                return []  # Not a user's card, return empty
-            
-            # Filter deals to only those linked to this specific card
-            # Use distinct() to avoid duplicates from M2M relationships
-            qs = (
-                peekaboo_qs.filter(linked_cards__id=card_id)
-                .prefetch_related('linked_cards')  # Prefetch to avoid N+1 queries
-                .order_by("-percentage_value", "-end_date")
-                .distinct()
-            )
-            
-            # Additional safety check: verify each deal is actually linked to this card
-            # This prevents showing deals that might have been incorrectly included
-            # Also deduplicate by merchant_name + discount_percentage to prevent showing same deal multiple times
-            verified_deals = []
-            seen_deals = set()  # Track seen deals to prevent duplicates
-            
-            for d in qs[:20]:  # Get more to filter and deduplicate
-                try:
-                    linked_card_ids = [c.id for c in d.linked_cards.all()] if hasattr(d, 'linked_cards') else []
-                    if card_id not in linked_card_ids:
-                        continue
-                    
-                    # Create deduplication key
-                    merchant = (d.target_entity_name or d.title or "").strip().lower()
-                    discount = _safe_float(d.percentage_value)
-                    deal_category = (d.category or "").strip().lower()
-                    
-                    # Use deal_id if available for better deduplication
-                    if d.deal_id:
-                        dedup_key = f"deal_{d.deal_id}"
-                    else:
-                        dedup_key = f"{merchant}_{discount}_{deal_category}"
-                    
-                    # Only add if not seen before
-                    if dedup_key not in seen_deals:
-                        seen_deals.add(dedup_key)
-                        verified_deals.append(d)
-                    
-                    if len(verified_deals) >= 6:
-                        break
-                except Exception:
-                    # Skip deals that can't be verified
-                    continue
-            
-            # Use verified and deduplicated deals
-            deals_to_process = verified_deals
-            
-            # Get card info for URL generation
-            card = next((c for c in cards if c.id == card_id), None)
-            if not card:
-                return []
-            
-            # Get bank info for URL generation
-            bank = card.bank if card else None
-            bank_code = bank.code.upper() if bank else None
-            
-            # Get bank slug and IDs from BANK_PEEKABOO_IDS
-            try:
-                from scraping.tasks_peekaboo import BANK_PEEKABOO_IDS, BANK_SLUG_MAP
-                bank_info = BANK_PEEKABOO_IDS.get(bank_code, {}) if bank_code else {}
-                source_entity_id = bank_info.get('sourceEntityId')
-                entity_id = bank_info.get('entityId')
-                bank_slug = BANK_SLUG_MAP.get(bank_code, bank.name.lower().replace(' ', '-') if bank else '') if bank_code else ''
-            except ImportError:
-                # Fallback if imports fail
-                bank_info = {}
-                source_entity_id = None
-                entity_id = None
-                bank_slug = bank.name.lower().replace(' ', '-') if bank else ''
-            
-            # Get card slug and associationTypeId
-            card_slug = card.peekaboo_card_slug or card.name.lower().replace(' ', '-').replace('card', '').replace('debit', '').replace('credit', '').strip('-')
-            association_type_id = card.peekaboo_association_type_id
-            
-            out: List[Dict[str, Any]] = []
-            
-            # If no associationTypeId, we can't build the URL properly, but still return deals
-            if not association_type_id and not source_entity_id:
-                # Still return deals but without proper URL
-                for d in deals_to_process:
-                    out.append(
-                        {
-                            "source": "PEEKABOO",
-                            "title": d.title,
-                            "merchant_name": d.target_entity_name,
-                            "image": d.image or d.target_entity_logo,
-                            "merchant_logo": d.target_entity_logo,
-                            "discount_percentage": _safe_float(d.percentage_value),
-                            "city": d.city,
-                            "category": d.category,
-                            "source_url": None,
-                            "bank_name": bank.name if bank else None,
-                            "card_name": card.name if card else None,
-                        }
-                    )
-                return out
-            
-            # CRITICAL: Always use the recommended card's information for URL generation
-            # Don't try to find a "matching" card from the deal - this ensures URLs always point to the recommended card
-            # A deal can be linked to multiple cards, but we want to show it for the recommended card specifically
-            for d in deals_to_process:
-                # Always use the recommended card's info (card_id parameter)
-                # This ensures all URLs are for the recommended card, not other cards linked to the same deal
-                actual_card_slug = card_slug  # Always use recommended card's slug
-                actual_association_type_id = association_type_id  # Always use recommended card's association type
-                actual_card_name = card.name if card else None  # Always use recommended card's name
-                
-                # Try to get association ID (ai) from deal's associations JSON that matches our card
-                # But still use the recommended card's slug and associationTypeId
-                actual_ai = association_type_id  # Default to recommended card's association type
-                
-                # Try to find the association ID (ai) from deal's associations that matches our card
-                if d.associations and isinstance(d.associations, list):
-                    for assoc in d.associations:
-                        if isinstance(assoc, dict):
-                            assoc_type_id = assoc.get('typeId')
-                            # Only use this association if it matches our recommended card's associationTypeId
-                            if assoc_type_id == actual_association_type_id:
-                                # Found matching association - use its associationId (ai) but keep our card's slug
-                                actual_ai = assoc.get('associationId') or assoc.get('id') or actual_association_type_id
-                                break
-                
-                # Generate Peekaboo URL matching the pattern:
-                # /{city}/places/{categoryId}/{categorySlug}?ai={ai}&associationTypeId={associationTypeId}&card={cardSlug}&dealId={dealId}&discounts={bankSlug}&ei={entityId}&selfDeal=true&sourceEntityId={sourceEntityId}
-                city_lower = (d.city or city_upper or 'karachi').lower()
-                category_slug = (d.category or 'all').lower().replace(' ', '-').replace('&', 'and')
-                category_id = '1'  # Default to 1 (Food), but we could map categories to IDs
-                
-                # Map common categories to Peekaboo category IDs
-                category_id_map = {
-                    'food': '1',
-                    'lifestyle': '18',
-                    'health': '2',
-                    'entertainment': '3',
-                    'e-stores': '4',
-                    'education': '5',
-                    'home-decor': '6',
-                    'services': '7',
-                    'electronics': '8',
-                    'self-care': '9',
-                    'public-services': '10',
-                    'hotels': '11',
-                    'grocery': '12',
-                }
-                category_id = category_id_map.get(category_slug, '_all')  # Use _all if category not found
-                
-                # Build URL parameters - ALWAYS use recommended card's info
-                # This ensures URLs always point to the recommended card, not other cards
-                url_params = {}
-                if actual_ai:
-                    url_params['ai'] = str(actual_ai)
-                if actual_association_type_id:
-                    url_params['associationTypeId'] = str(actual_association_type_id)
-                if actual_card_slug:
-                    url_params['card'] = actual_card_slug  # Always recommended card's slug
-                if bank_slug:
-                    url_params['discounts'] = bank_slug
-                if entity_id:
-                    url_params['ei'] = str(entity_id)
-                url_params['selfDeal'] = 'true'
-                if source_entity_id:
-                    url_params['sourceEntityId'] = str(source_entity_id)
-                
-                # Add dealId if available
-                if d.deal_id:
-                    url_params['dealId'] = str(d.deal_id)
-                
-                # Build full URL - use _all/all if we don't have category info
-                base_url = 'https://peekaboo.guru'
-                if category_id == '_all' or not category_slug or category_slug == 'all':
-                    url_path = f"/{city_lower}/places/_all/all"
-                else:
-                    url_path = f"/{city_lower}/places/{category_id}/{category_slug}"
-                
-                query_string = '&'.join([f"{k}={v}" for k, v in url_params.items() if v])
-                source_url = f"{base_url}{url_path}?{query_string}" if query_string else None
-                
-                # If we still don't have a URL, create a basic one
-                if not source_url and d.deal_id:
-                    source_url = f"{base_url}/{city_lower}/places/_all/all?dealId={d.deal_id}"
-                
-                out.append(
-                    {
-                        "source": "PEEKABOO",
-                        "title": d.title,
-                        "merchant_name": d.target_entity_name,
-                        "image": d.image or d.target_entity_logo,
-                        "merchant_logo": d.target_entity_logo,
-                        "discount_percentage": _safe_float(d.percentage_value),
-                        "city": d.city,
-                        "category": d.category,
-                        "source_url": source_url,  # Always include URL (even if basic)
-                        "bank_name": bank.name if bank else None,
-                        "card_name": actual_card_name,  # Always use recommended card's name
-                    }
-                )
-            return out
+            # NOTE: Peekaboo offers removed - always return empty
+            return []
 
         def _partners_top_offers_for_card(card_id: int) -> List[Dict[str, Any]]:
-            # CRITICAL: Only show offers that are ACTUALLY linked to this specific card
+            # CRITICAL: Only show offers where this card is EXPLICITLY in the associations array
+            # This means the card must be in available_on_cards ManyToMany field
             # Filter by card_id and ensure card_id is in user's card_ids
             if card_id not in card_ids:
                 return []  # Not a user's card, return empty
@@ -532,50 +292,42 @@ class SmartRecommendationsView(APIView):
             )
             partner_card_ids = list(partner_cards.values_list('id', flat=True))
             
-            # Use available_on_cards if available, otherwise fallback to partner_card__credit_card_id
+            # CRITICAL: If no PartnerCards found, return empty (can't verify associations)
+            if not partner_card_ids:
+                return []  # No PartnerCards found - can't verify if card is in associations
+            
+            # STRICT FILTERING: Only show offers where this card is in available_on_cards (associations array)
+            # NO FALLBACK - if available_on_cards doesn't exist or is empty, return empty
             try:
-                if partner_card_ids:
-                    # Filter offers where this card is in available_on_cards
-                    qs = (
-                        partners_qs.filter(available_on_cards__id__in=partner_card_ids)
-                        .distinct()
-                        .order_by("-discount_percentage", "-valid_to", "-id")
-                    )
-                else:
-                    # No PartnerCards found, try fallback
-                    qs = (
-                        partners_qs.filter(partner_card__credit_card_id=card_id)
-                        .order_by("-discount_percentage", "-valid_to", "-id")
-                    )
-            except (FieldError, AttributeError):
-                # available_on_cards doesn't exist, use fallback
+                # Filter offers where this card's PartnerCard(s) are in available_on_cards
                 qs = (
-                    partners_qs.filter(partner_card__credit_card_id=card_id)
+                    partners_qs.filter(available_on_cards__id__in=partner_card_ids)
+                    .prefetch_related('available_on_cards')
+                    .distinct()
                     .order_by("-discount_percentage", "-valid_to", "-id")
                 )
+            except (FieldError, AttributeError):
+                # available_on_cards field doesn't exist - return empty (can't verify associations)
+                return []
             
-            # Additional safety check: verify each offer is actually linked to this card
-            # This prevents showing offers that might have been incorrectly included
-            # Also deduplicate by merchant_name + discount_percentage to prevent showing same offer multiple times
+            # CRITICAL: Additional verification - ensure each offer actually has this card in available_on_cards
+            # This double-checks that the offer is in the associations array for this card
             verified_offers = []
             seen_offers = set()  # Track seen offers to prevent duplicates
             
             for o in qs[:20]:  # Get more to filter and deduplicate
-                # Verify offer is linked to this card via available_on_cards or partner_card
+                # STRICT VERIFICATION: Only include if this card is explicitly in available_on_cards
                 is_linked = False
-                if partner_card_ids:
-                    # Check if any of the card's PartnerCards are in available_on_cards
-                    try:
-                        if hasattr(o, 'available_on_cards'):
-                            offer_card_ids = list(o.available_on_cards.filter(id__in=partner_card_ids).values_list('id', flat=True))
-                            is_linked = len(offer_card_ids) > 0
-                    except (AttributeError, Exception):
-                        pass
+                try:
+                    if hasattr(o, 'available_on_cards'):
+                        # Check if any of the card's PartnerCards are in available_on_cards
+                        offer_card_ids = list(o.available_on_cards.filter(id__in=partner_card_ids).values_list('id', flat=True))
+                        is_linked = len(offer_card_ids) > 0
+                except (AttributeError, Exception):
+                    # If we can't verify, skip this offer (safety first)
+                    continue
                 
-                # Fallback check: verify via partner_card
-                if not is_linked:
-                    is_linked = (o.partner_card and o.partner_card.credit_card_id == card_id)
-                
+                # CRITICAL: If not linked via available_on_cards, skip (NO FALLBACK)
                 if not is_linked:
                     continue
                 
@@ -687,36 +439,33 @@ class SmartRecommendationsView(APIView):
         # Score cards
         scored: List[CardScore] = []
         for card in cards:
-            peek_pct = peekaboo_best_by_card.get(card.id, 0.0)
             part_pct = partners_best_by_card.get(card.id, 0.0)
-            peek_cnt = peekaboo_count_by_card.get(card.id, 0)
             part_cnt = partners_count_by_card.get(card.id, 0)
 
-            # Pakistan-focused scoring (offers first):
-            # - Primary: best % OFF across Peekaboo + Partners
-            # - Secondary: number of active offers found (small boost)
+            # Pakistan-focused scoring (Partners offers only):
+            # - Primary: best % OFF from Partners
+            # - Secondary: number of active Partners offers found (small boost)
             # We intentionally DO NOT rely on points/cashback as users requested.
-            best_offer_pct = max(peek_pct, part_pct)
-            score = best_offer_pct + (min(peek_cnt + part_cnt, 20) * 0.05)
+            best_offer_pct = part_pct
+            score = best_offer_pct + (min(part_cnt, 20) * 0.05)
 
             reasons: List[str] = []
             if best_offer_pct > 0:
-                source = "Peekaboo" if peek_pct >= part_pct else "Partners"
                 if category:
-                    reasons.append(f"Best {category} deal: {best_offer_pct:.0f}% OFF ({source})")
+                    reasons.append(f"Best {category} deal: {best_offer_pct:.0f}% OFF (Partners)")
                 else:
-                    reasons.append(f"Best deal: {best_offer_pct:.0f}% OFF ({source})")
-            if peek_cnt or part_cnt:
+                    reasons.append(f"Best deal: {best_offer_pct:.0f}% OFF (Partners)")
+            if part_cnt:
                 if category:
-                    reasons.append(f"Active {category} offers: {peek_cnt} Peekaboo, {part_cnt} Partners")
+                    reasons.append(f"Active {category} offers: {part_cnt} Partners")
                 else:
-                    reasons.append(f"Active offers: {peek_cnt} Peekaboo, {part_cnt} Partners")
+                    reasons.append(f"Active offers: {part_cnt} Partners")
             if not reasons:
                 reasons.append("No specific offers found for this category, but it's an active card.")
 
             # Attach top offers so UI can show "brands/deals like Partners Offers"
-            # Combine Peekaboo and Partners offers
-            all_offers = _partners_top_offers_for_card(card.id) + _peekaboo_top_offers_for_card(card.id)
+            # Only show Partners offers (Peekaboo removed)
+            all_offers = _partners_top_offers_for_card(card.id)
             
             # CRITICAL: Deduplicate offers to prevent showing the same deal multiple times
             # Deduplicate by merchant_name + discount_percentage + category (or dealId if available)
@@ -766,9 +515,9 @@ class SmartRecommendationsView(APIView):
                     base_cashback=0.0,
                     base_rewards=0.0,
                     category_reward=0.0,
-                    peekaboo_best_pct=peek_pct,
+                    peekaboo_best_pct=0.0,  # Always 0 - Peekaboo removed
                     partners_best_pct=part_pct,
-                    peekaboo_offer_count=peek_cnt,
+                    peekaboo_offer_count=0,  # Always 0 - Peekaboo removed
                     partners_offer_count=part_cnt,
                     top_offers=top_offers,
                     score=score,
@@ -776,7 +525,7 @@ class SmartRecommendationsView(APIView):
                 )
             )
 
-        scored.sort(key=lambda x: (x.score, x.partners_best_pct, x.peekaboo_best_pct), reverse=True)
+        scored.sort(key=lambda x: (x.score, x.partners_best_pct), reverse=True)
         best = scored[0] if scored else None
 
         def _serialize(cs: CardScore) -> Dict[str, Any]:
@@ -791,9 +540,9 @@ class SmartRecommendationsView(APIView):
                     "base_cashback_pct": cs.base_cashback,
                     "base_reward_points_rate": cs.base_rewards,
                     "category_reward_rate": cs.category_reward,
-                    "peekaboo_best_offer_pct": cs.peekaboo_best_pct,
+                    "peekaboo_best_offer_pct": 0,  # Always 0 - Peekaboo removed
                     "partners_best_offer_pct": cs.partners_best_pct,
-                    "peekaboo_offer_count": cs.peekaboo_offer_count,
+                    "peekaboo_offer_count": 0,  # Always 0 - Peekaboo removed
                     "partners_offer_count": cs.partners_offer_count,
                 },
                 "top_offers": cs.top_offers,
