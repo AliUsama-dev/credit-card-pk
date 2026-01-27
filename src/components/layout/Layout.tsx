@@ -43,6 +43,7 @@ import {
   AdminPanelSettings,
   Business,
   Event,
+  Email,
 } from '@mui/icons-material';
 import ChatbotWidget from '../chatbot/ChatbotWidget';
 
@@ -166,6 +167,13 @@ const Layout: React.FC = () => {
       icon: <Event />,
       path: '/planning',
       badge: null,
+    });
+    menuItems.push({
+      text: 'Gmail Expenses',
+      icon: <Email />,
+      path: '/gmail-expenses',
+      badge: null,
+      highlight: true,
     });
   }
 

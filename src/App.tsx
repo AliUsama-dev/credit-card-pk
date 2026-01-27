@@ -27,6 +27,7 @@ import AdminPartnersOffers from './pages/AdminPartnersOffers';
 import UserPartnersOffers from './pages/UserPartnersOffers';
 import SmartRecommendations from './pages/SmartRecommendations';
 import Planning from './pages/Planning';
+import GmailExpenses from './pages/GmailExpenses';
 
 // Auth context
 interface User {
@@ -352,6 +353,7 @@ const AppContent: React.FC = () => {
         <Route path="smart-recommendations" element={<SmartRecommendations />} />
         <Route path="planning" element={<Planning />} />
         <Route path="admin-partners-offers" element={<AdminPartnersOffers />} />
+        <Route path="gmail-expenses" element={<GmailExpenses />} />
       </Route>
       
       {/* Fallback route */}
