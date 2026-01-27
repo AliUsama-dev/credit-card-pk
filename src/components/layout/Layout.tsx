@@ -42,6 +42,7 @@ import {
   AutoAwesome,
   AdminPanelSettings,
   Business,
+  Event,
 } from '@mui/icons-material';
 import ChatbotWidget from '../chatbot/ChatbotWidget';
 
@@ -159,6 +160,12 @@ const Layout: React.FC = () => {
       path: '/smart-recommendations',
       badge: null,
       highlight: true,
+    });
+    menuItems.push({
+      text: 'Schedule & Plan',
+      icon: <Event />,
+      path: '/planning',
+      badge: null,
     });
   }
 

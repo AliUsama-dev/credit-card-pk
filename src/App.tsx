@@ -26,6 +26,7 @@ import PartnersOffers from './pages/PartnersOffers';
 import AdminPartnersOffers from './pages/AdminPartnersOffers';
 import UserPartnersOffers from './pages/UserPartnersOffers';
 import SmartRecommendations from './pages/SmartRecommendations';
+import Planning from './pages/Planning';
 
 // Auth context
 interface User {
@@ -349,6 +350,7 @@ const AppContent: React.FC = () => {
         <Route path="partners-offers" element={<PartnersOffers />} />
         <Route path="my-partners-offers" element={<UserPartnersOffers />} />
         <Route path="smart-recommendations" element={<SmartRecommendations />} />
+        <Route path="planning" element={<Planning />} />
         <Route path="admin-partners-offers" element={<AdminPartnersOffers />} />
       </Route>
       
