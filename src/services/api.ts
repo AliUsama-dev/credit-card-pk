@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
+// Use 127.0.0.1 by default instead of localhost to avoid any browser HSTS/HTTPS upgrade issues
+// You can override this in production with REACT_APP_API_URL
+const API_URL = process.env.REACT_APP_API_URL || 'http://127.0.0.1:8000/api';
 
 const api = axios.create({
   baseURL: API_URL,

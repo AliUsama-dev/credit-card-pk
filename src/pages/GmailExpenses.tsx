@@ -104,7 +104,19 @@ const GmailExpenses: React.FC = () => {
         // Sync completed synchronously (development mode)
         const result = data.result;
         if (result.error) {
-          toast.error(`Sync failed: ${result.error}`);
+          const errorMsg = result.error;
+          
+          // Check if re-authentication is needed
+          if (result.needs_reauth) {
+            toast.error(
+              errorMsg + ' Click "Revoke Access" and then "Connect Gmail" again.',
+              { duration: 6000 }
+            );
+          } else if (result.needs_config) {
+            toast.error(errorMsg, { duration: 6000 });
+          } else {
+            toast.error(`Sync failed: ${errorMsg}`);
+          }
         } else {
           toast.success(
             `Sync completed! Processed ${result.processed || 0} emails, ` +
@@ -127,7 +139,8 @@ const GmailExpenses: React.FC = () => {
       }, 2000);
     },
     onError: (error: any) => {
-      toast.error(error.response?.data?.error || 'Failed to sync Gmail');
+      const errorMsg = error.response?.data?.error || 'Failed to sync Gmail';
+      toast.error(errorMsg, { duration: 5000 });
       setSyncDialogOpen(false);
     },
   });

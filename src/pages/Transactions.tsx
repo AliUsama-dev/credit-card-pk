@@ -144,6 +144,9 @@ const Transactions: React.FC = () => {
     onSuccess: (data) => {
       toast.success(`Successfully uploaded! Parsed ${data.transactions.length} transactions`);
       queryClient.invalidateQueries({ queryKey: ['transactions'] });
+      // Keep Dashboard KPIs + charts in sync after statement upload
+      queryClient.invalidateQueries({ queryKey: ['savings-analysis'] });
+      queryClient.invalidateQueries({ queryKey: ['spending-categories'] });
       setUploadDialogOpen(false);
       setSelectedFile(null);
       setSelectedCardId('');

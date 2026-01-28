@@ -50,7 +50,7 @@ import ChatbotWidget from '../chatbot/ChatbotWidget';
 const drawerWidth = 280;
 
 // Type definition for menu items
-interface MenuItem {
+interface MenuItemType {
   text: string;
   icon: React.ReactElement;
   path: string;
@@ -87,32 +87,13 @@ const Layout: React.FC = () => {
     navigate('/login');
   };
 
-  const menuItems: MenuItem[] = [
+  const menuItems: MenuItemType[] = [
     { 
       text: 'Dashboard', 
       icon: <Dashboard />, 
       path: '/',
       badge: null,
     },
-    // { 
-    //   text: 'Offers', 
-    //   icon: <LocalOffer />, 
-    //   path: '/offers',
-    //   badge: 12,
-    // },
-    // { 
-    //   text: 'Peekaboo Deals', 
-    //   icon: <AutoAwesome />, 
-    //   path: '/peekaboo-deals',
-    //   badge: null,
-    //   highlight: true,
-    // },
-    // { 
-    //   text: 'Bank-Specific Deals', 
-    //   icon: <AccountBalance />, 
-    //   path: '/bank-specific-deals',
-    //   badge: null,
-    // },
     { 
       text: 'Profile', 
       icon: <Person />, 
@@ -395,31 +376,75 @@ const Layout: React.FC = () => {
       >
         <Toolbar />
         <Box sx={{ overflow: 'auto', py: 2 }}>
-          {/* Sidebar Header */}
+          {/* Sidebar Header - Replaced with Card Image */}
           <Box sx={{ px: 3, pb: 2, mb: 2, borderBottom: `1px solid ${alpha(theme.palette.divider, 0.1)}` }}>
-            <Stack direction="row" alignItems="center" spacing={1}>
+            <Stack direction="row" alignItems="center" spacing={2}>
               <Box
                 sx={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 2.5,
-                  background: `linear-gradient(135deg, ${theme.palette.primary.main} 0%, ${theme.palette.secondary.main} 100%)`,
+                  width: 50,
+                  height: 50,
+                  borderRadius: 2,
+                  overflow: 'hidden',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: 'white',
-                  boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)',
+                  boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+                  border: `1px solid ${alpha(theme.palette.divider, 0.2)}`,
                 }}
               >
-                <CreditCard />
+                <img 
+                  src="/card.png" 
+                  alt="Credit Card Logo"
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                  }}
+                  onError={(e) => {
+                    // Fallback if image doesn't load
+                    const target = e.target as HTMLImageElement;
+                    target.style.display = 'none';
+                    target.parentElement!.innerHTML = `
+                      <div style="
+                        width: 100%;
+                        height: 100%;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        background: linear-gradient(135deg, ${theme.palette.primary.main} 0%, ${theme.palette.secondary.main} 100%);
+                        color: white;
+                        font-weight: bold;
+                        font-size: 12px;
+                      ">
+                        CCO
+                      </div>
+                    `;
+                  }}
+                />
               </Box>
               {open && (
-                <Box>
-                  <Typography variant="subtitle2" sx={{ fontWeight: 700, lineHeight: 1.2 }}>
-                    Navigation
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Typography 
+                    variant="subtitle2" 
+                    sx={{ 
+                      fontWeight: 700, 
+                      lineHeight: 1.2,
+                      color: theme.palette.text.primary,
+                      fontSize: '0.95rem',
+                    }}
+                  >
+                    Card Optimizer
                   </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    Quick Access
+                  <Typography 
+                    variant="caption" 
+                    sx={{ 
+                      color: theme.palette.text.secondary,
+                      fontWeight: 500,
+                      display: 'block',
+                      mt: 0.5,
+                    }}
+                  >
+                    Pakistan
                   </Typography>
                 </Box>
               )}
