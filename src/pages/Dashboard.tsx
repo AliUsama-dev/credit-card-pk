@@ -103,7 +103,7 @@ const Dashboard: React.FC = () => {
   const theme = useTheme();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [periodDays, setPeriodDays] = useState<7 | 30 | 90 | 365 | 'all'>(30);
+  const [periodDays, setPeriodDays] = useState<7 | 30 | 90 | 365 | 'all'>("all");
   const [viewMode, setViewMode] = useState<'cards' | 'charts' | 'table'>('charts');
   const daysParam = periodDays === 'all' ? 3650 : periodDays;
 
