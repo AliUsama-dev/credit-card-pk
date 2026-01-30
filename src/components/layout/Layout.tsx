@@ -762,9 +762,7 @@ const Layout: React.FC = () => {
                 );
               })}
             </List>
-          </Box>
-
-          
+          </Box>    
         </Box>
       </Drawer>
 

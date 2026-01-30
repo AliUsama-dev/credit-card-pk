@@ -198,7 +198,7 @@ const Login: React.FC = () => {
             {loading ? <CircularProgress size={24} color="inherit" /> : 'Sign In'}
           </Button>
 
-          <Button
+          {/* <Button
             fullWidth
             variant="outlined"
             size="large"
@@ -211,7 +211,7 @@ const Login: React.FC = () => {
             startIcon={<AccountCircle />}
           >
             Try Demo Account
-          </Button>
+          </Button> */}
 
           <Divider sx={{ my: 3 }}>
             <Typography variant="body2" color="text.secondary">
@@ -249,7 +249,7 @@ const Login: React.FC = () => {
       </Paper>
 
       {/* Feature Highlights */}
-      <Box sx={{ mt: 4, textAlign: 'center' }}>
+      {/* <Box sx={{ mt: 4, textAlign: 'center' }}>
         <Typography variant="h6" gutterBottom sx={{ fontWeight: 'bold' }}>
           Why Use Card Optimizer?
         </Typography>
@@ -279,7 +279,7 @@ const Login: React.FC = () => {
             </Paper>
           ))}
         </Box>
-      </Box>
+      </Box> */}
     </Container>
   );
 };

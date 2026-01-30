@@ -1117,55 +1117,7 @@ const SmartRecommendations: React.FC = () => {
             </CardContent>
           </Card>
 
-          {/* Info Cards */}
-          <Grid container spacing={3} sx={{ mt: 3 }}>
-            <Grid item xs={12} md={6}>
-              <Card elevation={0} sx={{ 
-                p: 3, 
-                borderRadius: 3,
-                bgcolor: 'primary.light',
-                color: 'primary.dark'
-              }}>
-                <Stack direction="row" spacing={2} alignItems="flex-start">
-                  <VerifiedUser sx={{ fontSize: 40, opacity: 0.9, flexShrink: 0 }} />
-                  <Box>
-                    <Typography variant="h6" fontWeight={900} gutterBottom>
-                      How We Calculate Scores
-                    </Typography>
-                    <Typography variant="body2">
-                      Our AI analyzes multiple factors: base cashback rates, category-specific rewards, 
-                      available partner offers, Peekaboo deals, and historical spending patterns to 
-                      determine the optimal card for each spending category.
-                    </Typography>
-                  </Box>
-                </Stack>
-              </Card>
-            </Grid>
-            <Grid item xs={12} md={6}>
-              <Card elevation={0} sx={{ 
-                p: 3, 
-                borderRadius: 3,
-                bgcolor: 'info.light',
-                color: 'info.dark'
-              }}>
-                <Stack direction="row" spacing={2} alignItems="flex-start">
-                  <Info sx={{ fontSize: 40, opacity: 0.9, flexShrink: 0 }} />
-                  <Box>
-                    <Typography variant="h6" fontWeight={900} gutterBottom>
-                      Tips for Maximum Savings
-                    </Typography>
-                    <Typography variant="body2">
-                      • Use the recommended card for each category
-                      • Combine card rewards with partner offers
-                      • Check for city-specific deals
-                      • Monitor limited-time promotions
-                      • Set reminders for recurring offers
-                    </Typography>
-                  </Box>
-                </Stack>
-              </Card>
-            </Grid>
-          </Grid>
+          
         </>
       )}
     </Container>

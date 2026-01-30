@@ -1020,51 +1020,7 @@ const UserPartnersOffers: React.FC = () => {
 
      
 
-      {/* Tips & Info */}
-      <Grid container spacing={3} sx={{ mt: 2 }}>
-        <Grid item xs={12} md={6}>
-          <Card elevation={0} sx={{ 
-            p: 3, 
-            borderRadius: 3,
-            bgcolor: 'primary.light',
-            color: 'primary.dark'
-          }}>
-            <Stack direction="row" spacing={2} alignItems="flex-start">
-              <VerifiedUser sx={{ fontSize: 40, opacity: 0.9, flexShrink: 0 }} />
-              <Box>
-                <Typography variant="h6" fontWeight="bold" gutterBottom>
-                  Verified Offers
-                </Typography>
-                <Typography variant="body2">
-                  All offers are verified directly from partner banks and updated regularly. 
-                  Click on any offer to be redirected to the official partner page.
-                </Typography>
-              </Box>
-            </Stack>
-          </Card>
-        </Grid>
-        <Grid item xs={12} md={6}>
-          <Card elevation={0} sx={{ 
-            p: 3, 
-            borderRadius: 3,
-            bgcolor: 'success.light',
-            color: 'success.dark'
-          }}>
-            <Stack direction="row" spacing={2} alignItems="flex-start">
-              <Info sx={{ fontSize: 40, opacity: 0.9, flexShrink: 0 }} />
-              <Box>
-                <Typography variant="h6" fontWeight="bold" gutterBottom>
-                  How it Works
-                </Typography>
-                <Typography variant="body2">
-                  Partner offers are automatically matched to your credit cards. 
-                  The admin runs regular scraping to ensure you get the latest deals.
-                </Typography>
-              </Box>
-            </Stack>
-          </Card>
-        </Grid>
-      </Grid>
+      
     </Container>
   );
 };
