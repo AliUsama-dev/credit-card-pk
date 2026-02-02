@@ -174,14 +174,39 @@ const AdminScraping: React.FC = () => {
       return response.data;
     },
     onSuccess: (data) => {
-      toast.success(`Scraped ${data.banks_scraped || 0} banks! Total offers: ${data.total_offers_created || 0}`);
-      queryClient.invalidateQueries({ queryKey: ['partner-banks'] });
-      queryClient.invalidateQueries({ queryKey: ['partner-cards'] });
-      queryClient.invalidateQueries({ queryKey: ['partner-offers'] });
+      // Handle async response - scraping runs in background
+      if (data.mode === 'celery' || data.mode === 'threading') {
+        const message = data.message || 'Scraping started in background for all partner banks';
+        const taskId = data.task_id ? ` (Task ID: ${data.task_id})` : '';
+        const modeInfo = data.mode === 'celery' 
+          ? '📊 Check Terminal 3 (Celery Worker) for progress.'
+          : '📊 Check Terminal 1 (Django Server) for progress.';
+        
+        toast.success(
+          `${message}${taskId}\n\n✅ Task is running in background.\n${modeInfo}\n⏱️ This may take 5-10 minutes.`,
+          { duration: 10000 }
+        );
+        
+        // Invalidate queries periodically to show updates
+        const intervalId = setInterval(() => {
+          queryClient.invalidateQueries({ queryKey: ['partner-banks'] });
+          queryClient.invalidateQueries({ queryKey: ['partner-cards'] });
+          queryClient.invalidateQueries({ queryKey: ['partner-offers'] });
+        }, 30000); // Every 30 seconds
+        
+        // Clear interval after 10 minutes
+        setTimeout(() => clearInterval(intervalId), 600000);
+      } else {
+        // Legacy sync response (shouldn't happen, but handle it)
+        toast.success(`✅ Scraped ${data.banks_scraped || 0} banks! Total offers: ${data.total_offers_created || 0}`);
+        queryClient.invalidateQueries({ queryKey: ['partner-banks'] });
+        queryClient.invalidateQueries({ queryKey: ['partner-cards'] });
+        queryClient.invalidateQueries({ queryKey: ['partner-offers'] });
+      }
     },
     onError: (error: any) => {
       const errorMsg = error.response?.data?.error || error.message || 'Failed to scrape all partners';
-      toast.error(errorMsg);
+      toast.error(`❌ Scraping failed: ${errorMsg}`);
     },
   });
 
@@ -341,11 +366,13 @@ const AdminScraping: React.FC = () => {
                   <Stack direction="row" spacing={2}>
                     <Button
                       variant="outlined"
-                      startIcon={<Refresh />}
+                      startIcon={scrapeAllPartnersMutation.isPending ? <CircularProgress size={20} /> : <Refresh />}
                       onClick={handleScrapeAllPartners}
                       disabled={isLoading}
                     >
-                      Scrape All Banks (Banks + Cards + Offers)
+                      {scrapeAllPartnersMutation.isPending 
+                        ? 'Scraping in Background...' 
+                        : 'Scrape All Banks (Banks + Cards + Offers)'}
                     </Button>
                     <Button
                       variant="outlined"
@@ -510,6 +537,42 @@ const AdminScraping: React.FC = () => {
                   </Typography>
                   <Typography variant="body2">
                     {scrapeMutation.error?.response?.data?.error || 'An error occurred during scraping'}
+                  </Typography>
+                </Alert>
+              </Grid>
+            )}
+
+            {/* Status Card for Background Scraping */}
+            {selectedTab === 1 && scrapeAllPartnersMutation.isPending && (
+              <Grid item xs={12}>
+                <Alert 
+                  severity="info" 
+                  icon={<CircularProgress size={20} />}
+                  sx={{ 
+                    bgcolor: 'info.light',
+                    '& .MuiAlert-message': { width: '100%' }
+                  }}
+                >
+                  <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+                    🚀 Scraping in Background
+                  </Typography>
+                  <Typography variant="body2" component="div">
+                    <Box sx={{ mb: 1 }}>
+                      ✅ Task started successfully! The scraping is running in the background.
+                    </Box>
+                    <Box sx={{ mb: 1 }}>
+                      📊 <strong>Where to check progress:</strong>
+                      <ul style={{ margin: '8px 0', paddingLeft: '20px' }}>
+                        <li>Terminal 3 (Celery Worker) - See real-time scraping progress</li>
+                        <li>Terminal 1 (Django Server) - See API logs</li>
+                      </ul>
+                    </Box>
+                    <Box>
+                      ⏱️ <strong>Estimated time:</strong> 5-10 minutes (depends on number of banks)
+                    </Box>
+                    <Box sx={{ mt: 2, fontSize: '0.85rem', color: 'text.secondary' }}>
+                      💡 Tip: The page will auto-refresh data every 30 seconds. You can continue using the app while scraping runs.
+                    </Box>
                   </Typography>
                 </Alert>
               </Grid>
