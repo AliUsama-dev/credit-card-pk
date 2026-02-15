@@ -47,6 +47,7 @@ import {
   AccordionSummary,
   AccordionDetails,
   LinearProgress,
+  AlertTitle,
 } from '@mui/material';
 import {
   Event,
@@ -110,11 +111,29 @@ import {
   Print,
   QrCode,
   ReceiptLong,
+  PriorityHigh,
+  Timelapse,
+  History,
+  AccessAlarm,
+  EventBusy,
 } from '@mui/icons-material';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 import { planningService, ScheduledPurchase, PurchaseRecommendations } from '../services/planning';
-import { format, isToday, isTomorrow, isThisWeek, parseISO } from 'date-fns';
+import { 
+  format, 
+  isToday, 
+  isTomorrow, 
+  isThisWeek, 
+  parseISO, 
+  isPast, 
+  isFuture,
+  differenceInDays,
+  differenceInHours,
+  isWithinInterval,
+  subDays,
+  addDays,
+} from 'date-fns';
 
 const PURCHASE_TYPES = [
   { value: 'GROCERIES', label: 'Groceries', icon: <ShoppingCart />, color: '#4CAF50' },
@@ -137,6 +156,36 @@ const PAKISTAN_CITIES = [
   'MULTAN', 'HYDERABAD', 'PESHAWAR', 'QUETTA', 'SIALKOT',
 ];
 
+// Helper function to check purchase status
+const getPurchaseStatusInfo = (purchase: ScheduledPurchase) => {
+  const scheduledDate = parseISO(purchase.scheduled_date);
+  const now = new Date();
+  const isOverdue = isPast(scheduledDate) && purchase.status === 'SCHEDULED';
+  const daysOverdue = isOverdue ? Math.abs(differenceInDays(scheduledDate, now)) : 0;
+  const hoursOverdue = isOverdue ? Math.abs(differenceInHours(scheduledDate, now)) : 0;
+  
+  // Check if within warning period (within 24 hours)
+  const isApproaching = isFuture(scheduledDate) && 
+    differenceInHours(scheduledDate, now) <= 24 && 
+    purchase.status === 'SCHEDULED';
+  
+  // Check if expired (more than 7 days overdue)
+  const isExpired = isOverdue && daysOverdue > 7;
+  
+  // Check if today
+  const isDueToday = isToday(scheduledDate) && purchase.status === 'SCHEDULED';
+  
+  return {
+    isOverdue,
+    isExpired,
+    isApproaching,
+    isDueToday,
+    daysOverdue,
+    hoursOverdue,
+    scheduledDate,
+  };
+};
+
 const Planning: React.FC = () => {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -146,6 +195,7 @@ const Planning: React.FC = () => {
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const [activeTab, setActiveTab] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'OVERDUE' | 'COMPLETED'>('ALL');
   
   const [formData, setFormData] = useState({
     purchase_type: 'DINING',
@@ -162,8 +212,17 @@ const Planning: React.FC = () => {
     queryFn: () => planningService.getPurchases('SCHEDULED'),
   });
 
-  // Filter purchases based on search
+  // Filter purchases based on search and status
   const filteredPurchases = purchases?.filter(purchase => {
+    // Status filter
+    if (filterStatus !== 'ALL') {
+      const statusInfo = getPurchaseStatusInfo(purchase);
+      if (filterStatus === 'OVERDUE' && !statusInfo.isOverdue) return false;
+      if (filterStatus === 'ACTIVE' && (statusInfo.isOverdue || purchase.status === 'COMPLETED')) return false;
+      if (filterStatus === 'COMPLETED' && purchase.status !== 'COMPLETED') return false;
+    }
+    
+    // Search filter
     if (!searchQuery) return true;
     const query = searchQuery.toLowerCase();
     return (
@@ -175,13 +234,54 @@ const Planning: React.FC = () => {
     );
   });
 
-  // Group purchases by date
-  const groupedPurchases = filteredPurchases?.reduce((acc, purchase) => {
-    const date = format(parseISO(purchase.scheduled_date), 'yyyy-MM-dd');
-    if (!acc[date]) {
-      acc[date] = [];
+  // Sort purchases: overdue first, then approaching, then future
+  const sortedPurchases = filteredPurchases?.sort((a, b) => {
+    const aInfo = getPurchaseStatusInfo(a);
+    const bInfo = getPurchaseStatusInfo(b);
+    
+    // Overdue items first (most overdue first)
+    if (aInfo.isOverdue && bInfo.isOverdue) {
+      return aInfo.daysOverdue - bInfo.daysOverdue;
     }
-    acc[date].push(purchase);
+    if (aInfo.isOverdue) return -1;
+    if (bInfo.isOverdue) return 1;
+    
+    // Then approaching deadlines
+    if (aInfo.isApproaching && bInfo.isApproaching) {
+      return differenceInHours(aInfo.scheduledDate, new Date()) - 
+             differenceInHours(bInfo.scheduledDate, new Date());
+    }
+    if (aInfo.isApproaching) return -1;
+    if (bInfo.isApproaching) return 1;
+    
+    // Then sort by date
+    return aInfo.scheduledDate.getTime() - bInfo.scheduledDate.getTime();
+  });
+
+  // Group purchases by status
+  const groupedPurchases = sortedPurchases?.reduce((acc, purchase) => {
+    const statusInfo = getPurchaseStatusInfo(purchase);
+    
+    let category;
+    if (purchase.status === 'COMPLETED') {
+      category = 'completed';
+    } else if (statusInfo.isExpired) {
+      category = 'expired';
+    } else if (statusInfo.isOverdue) {
+      category = 'overdue';
+    } else if (statusInfo.isApproaching) {
+      category = 'approaching';
+    } else if (statusInfo.isDueToday) {
+      category = 'today';
+    } else {
+      const date = format(parseISO(purchase.scheduled_date), 'yyyy-MM-dd');
+      category = date;
+    }
+    
+    if (!acc[category]) {
+      acc[category] = [];
+    }
+    acc[category].push(purchase);
     return acc;
   }, {} as Record<string, ScheduledPurchase[]>);
 
@@ -193,11 +293,31 @@ const Planning: React.FC = () => {
     return format(parsedDate, 'MMM dd, yyyy');
   };
 
+  const getCategoryLabel = (category: string) => {
+    switch (category) {
+      case 'completed':
+        return 'Completed Purchases';
+      case 'expired':
+        return 'Expired Purchases';
+      case 'overdue':
+        return 'Overdue Purchases';
+      case 'approaching':
+        return 'Approaching Deadlines (24h)';
+      case 'today':
+        return 'Due Today';
+      default:
+        return getDateLabel(category);
+    }
+  };
+
   const createMutation = useMutation({
     mutationFn: (data: Partial<ScheduledPurchase>) => planningService.createPurchase(data),
     onSuccess: () => {
       toast.success('Purchase scheduled successfully! 🎯');
       queryClient.invalidateQueries({ queryKey: ['scheduled-purchases'] });
+      // Invalidate notifications so the notification bell shows the new notification
+      queryClient.invalidateQueries({ queryKey: ['unreadNotificationsCount'] });
+      queryClient.invalidateQueries({ queryKey: ['notifications'] });
       setDialogOpen(false);
       resetForm();
     },
@@ -305,200 +425,557 @@ const Planning: React.FC = () => {
     }
   };
 
-  const renderPurchaseCard = (purchase: ScheduledPurchase) => (
-    <Fade in={true} timeout={500}>
-      <Card sx={{ 
-        borderRadius: 3, 
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        border: '1px solid',
-        borderColor: 'divider',
-        transition: 'all 0.3s ease',
-        '&:hover': {
-          transform: 'translateY(-4px)',
-          boxShadow: '0 12px 32px rgba(0,0,0,0.12)',
-        }
-      }}>
-        <CardContent sx={{ p: 3, flex: 1, display: 'flex', flexDirection: 'column' }}>
-          {/* Header */}
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', mb: 2 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Box sx={{ 
-                width: 50, 
-                height: 50, 
-                borderRadius: 2,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                bgcolor: alpha(getPurchaseTypeColor(purchase.purchase_type), 0.1),
-                color: getPurchaseTypeColor(purchase.purchase_type),
-              }}>
-                {getPurchaseTypeIcon(purchase.purchase_type)}
-              </Box>
-              <Box>
-                <Typography variant="h6" fontWeight={800}>
-                  {PURCHASE_TYPES.find(pt => pt.value === purchase.purchase_type)?.label || purchase.purchase_type}
-                </Typography>
-                <Chip
-                  label={purchase.status}
-                  color={getStatusColor(purchase.status) as any}
-                  size="small"
-                  sx={{ fontWeight: 600, mt: 0.5 }}
-                />
-              </Box>
-            </Box>
-            
-            {purchase.active_offers && purchase.active_offers.length > 0 && (
-              <Badge badgeContent={purchase.active_offers.length} color="success">
-                <LocalOffer color="action" />
-              </Badge>
-            )}
-          </Box>
+  const renderStatusBadge = (purchase: ScheduledPurchase) => {
+    const statusInfo = getPurchaseStatusInfo(purchase);
+    
+    if (purchase.status === 'COMPLETED') {
+      return (
+        <Chip
+          label="COMPLETED"
+          color="success"
+          size="small"
+          icon={<CheckCircle fontSize="small" />}
+          sx={{ 
+            fontWeight: 700, 
+            mt: 0.5,
+            '& .MuiChip-icon': {
+              fontSize: '1rem',
+            }
+          }}
+        />
+      );
+    }
+    
+    if (statusInfo.isExpired) {
+      return (
+        <Chip
+          label={`EXPIRED ${statusInfo.daysOverdue}d ago`}
+          color="error"
+          size="small"
+          icon={<EventBusy fontSize="small" />}
+          sx={{ 
+            fontWeight: 700, 
+            mt: 0.5,
+            animation: 'pulse 2s infinite',
+            '@keyframes pulse': {
+              '0%': { opacity: 1 },
+              '50%': { opacity: 0.7 },
+              '100%': { opacity: 1 },
+            }
+          }}
+        />
+      );
+    }
+    
+    if (statusInfo.isOverdue) {
+      return (
+        <Chip
+          label={`OVERDUE ${statusInfo.daysOverdue}d`}
+          color="warning"
+          size="small"
+          icon={<PriorityHigh fontSize="small" />}
+          sx={{ 
+            fontWeight: 700, 
+            mt: 0.5,
+            bgcolor: '#FF9800',
+            color: 'white',
+          }}
+        />
+      );
+    }
+    
+    if (statusInfo.isDueToday) {
+      return (
+        <Chip
+          label="DUE TODAY"
+          color="primary"
+          size="small"
+          icon={<AccessAlarm fontSize="small" />}
+          sx={{ 
+            fontWeight: 700, 
+            mt: 0.5,
+            bgcolor: '#1976D2',
+            color: 'white',
+          }}
+        />
+      );
+    }
+    
+    if (statusInfo.isApproaching) {
+      return (
+        <Chip
+          label={`IN ${statusInfo.hoursOverdue}H`}
+          color="warning"
+          size="small"
+          icon={<Timelapse fontSize="small" />}
+          sx={{ 
+            fontWeight: 700, 
+            mt: 0.5,
+            bgcolor: '#FFB74D',
+            color: 'white',
+          }}
+        />
+      );
+    }
+    
+    return (
+      <Chip
+        label="SCHEDULED"
+        color="primary"
+        size="small"
+        icon={<Schedule fontSize="small" />}
+        sx={{ 
+          fontWeight: 700, 
+          mt: 0.5,
+          '& .MuiChip-icon': {
+            fontSize: '1rem',
+          }
+        }}
+      />
+    );
+  };
 
-          {/* Details */}
-          <Stack spacing={1.5} sx={{ mb: 2, flex: 1 }}>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Schedule fontSize="small" color="action" />
-              <Box>
-                <Typography variant="caption" color="text.secondary" display="block">
-                  Scheduled for
-                </Typography>
-                <Typography variant="body2" fontWeight={600}>
-                  {format(parseISO(purchase.scheduled_date), 'PPP p')}
-                </Typography>
-              </Box>
-            </Stack>
-
-            {purchase.location && (
-              <Stack direction="row" spacing={1} alignItems="center">
-                <LocationOn fontSize="small" color="action" />
-                <Box>
-                  <Typography variant="caption" color="text.secondary" display="block">
-                    Location
-                  </Typography>
-                  <Typography variant="body2" fontWeight={600}>
-                    {purchase.location}
-                  </Typography>
-                </Box>
-              </Stack>
-            )}
-
-            {purchase.estimated_amount && (
-              <Stack direction="row" spacing={1} alignItems="center">
-                <AttachMoney fontSize="small" color="action" />
-                <Box>
-                  <Typography variant="caption" color="text.secondary" display="block">
-                    Estimated Amount
-                  </Typography>
-                  <Typography variant="body2" fontWeight={600}>
-                    PKR {parseFloat(purchase.estimated_amount.toString()).toLocaleString()}
-                  </Typography>
-                </Box>
-              </Stack>
-            )}
-          </Stack>
-
-          {/* Recommended Card */}
-          {purchase.recommended_card_detail && (
-            <Paper sx={{ 
-              p: 2, 
-              mb: 2,
-              borderRadius: 2,
-              bgcolor: alpha('#2196F3', 0.05),
-              border: '1px solid',
-              borderColor: 'primary.light',
-            }}>
-              <Stack direction="row" spacing={2} alignItems="center">
-                <Avatar sx={{ bgcolor: 'primary.main', color: 'white' }}>
-                  <CreditCardIcon />
-                </Avatar>
-                <Box sx={{ flex: 1 }}>
-                  <Typography variant="subtitle2" fontWeight={700} color="primary.dark">
-                    Recommended Card
-                  </Typography>
-                  <Typography variant="body2" fontWeight={600}>
-                    {purchase.recommended_card_detail.name}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {purchase.recommended_card_detail.bank.name}
-                  </Typography>
-                </Box>
-              </Stack>
-            </Paper>
+  const renderPurchaseCard = (purchase: ScheduledPurchase) => {
+    const statusInfo = getPurchaseStatusInfo(purchase);
+    const isExpired = statusInfo.isExpired;
+    const isOverdue = statusInfo.isOverdue;
+    const isCompleted = purchase.status === 'COMPLETED';
+    
+    return (
+      <Fade in={true} timeout={500}>
+        <Card sx={{ 
+          borderRadius: 3, 
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          border: '2px solid',
+          borderColor: isExpired ? 'error.main' : 
+                     isOverdue ? 'warning.main' : 
+                     statusInfo.isDueToday ? 'primary.main' :
+                     statusInfo.isApproaching ? 'warning.light' : 'divider',
+          transition: 'all 0.3s ease',
+          opacity: isCompleted ? 0.8 : 1,
+          position: 'relative',
+          overflow: 'hidden',
+          '&:hover': {
+            transform: isCompleted ? 'none' : 'translateY(-4px)',
+            boxShadow: '0 12px 32px rgba(0,0,0,0.12)',
+          },
+          ...(isExpired && {
+            background: 'linear-gradient(45deg, #FFF5F5 0%, #FFEBEE 100%)',
+          }),
+          ...(isOverdue && {
+            background: 'linear-gradient(45deg, #FFF3E0 0%, #FFECB3 100%)',
+          }),
+          ...(statusInfo.isApproaching && {
+            background: 'linear-gradient(45deg, #FFF3E0 0%, #FFFDE7 100%)',
+          }),
+        }}>
+          {/* Expired/Overdue Banner */}
+          {isExpired && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 4,
+                background: 'linear-gradient(90deg, #F44336 0%, #E53935 100%)',
+                zIndex: 1,
+              }}
+            />
           )}
-
-          {/* Active Offers Preview */}
-          {purchase.active_offers && purchase.active_offers.length > 0 && (
-            <Box sx={{ mb: 2 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display: 'block', fontWeight: 600 }}>
-                {purchase.active_offers.length} Active Offers
-              </Typography>
-              <Stack direction="row" spacing={1} flexWrap="wrap" gap={0.5}>
-                {purchase.active_offers.slice(0, 3).map((offer, idx) => (
-                  <Chip
-                    key={idx}
-                    label={`${offer.discount}% OFF`}
-                    size="small"
-                    color="success"
-                    variant="outlined"
-                    icon={<Percent fontSize="small" />}
-                    sx={{ fontWeight: 600 }}
-                  />
-                ))}
-                {purchase.active_offers.length > 3 && (
-                  <Chip
-                    label={`+${purchase.active_offers.length - 3} more`}
-                    size="small"
-                    variant="outlined"
-                  />
-                )}
-              </Stack>
-            </Box>
+          
+          {isOverdue && !isExpired && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 4,
+                background: 'linear-gradient(90deg, #FF9800 0%, #FB8C00 100%)',
+                zIndex: 1,
+              }}
+            />
           )}
-        </CardContent>
-
-        {/* Actions */}
-        <CardActions sx={{ p: 2, pt: 0, borderTop: 1, borderColor: 'divider' }}>
-          <Stack direction="row" spacing={1} sx={{ width: '100%' }}>
-            <Button
-              size="small"
-              variant="contained"
-              startIcon={<CheckCircle />}
-              onClick={() => purchase.id && handleComplete(purchase.id)}
-              disabled={purchase.status === 'COMPLETED'}
-              sx={{ 
-                flex: 1,
-                borderRadius: 2,
-                bgcolor: purchase.status === 'COMPLETED' ? 'success.main' : 'primary.main',
-                '&:hover': {
-                  bgcolor: purchase.status === 'COMPLETED' ? 'success.dark' : 'primary.dark',
-                }
+          
+          {/* Corner Ribbon for Expired */}
+          {isExpired && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 10,
+                right: -35,
+                background: '#F44336',
+                color: 'white',
+                padding: '4px 40px',
+                transform: 'rotate(45deg)',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                letterSpacing: '0.5px',
+                zIndex: 2,
+                boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
               }}
             >
-              {purchase.status === 'COMPLETED' ? 'Completed' : 'Mark Complete'}
-            </Button>
-            <Tooltip title="Delete">
-              <IconButton
-                size="small"
-                color="error"
-                onClick={() => purchase.id && handleDelete(purchase.id)}
-                sx={{ 
+              EXPIRED
+            </Box>
+          )}
+          
+          {/* Overdue Indicator */}
+          {isOverdue && !isExpired && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 10,
+                right: 10,
+                zIndex: 2,
+              }}
+            >
+              <Tooltip title={`${statusInfo.daysOverdue} days overdue`}>
+                <Avatar
+                  sx={{
+                    width: 32,
+                    height: 32,
+                    bgcolor: 'warning.main',
+                    color: 'white',
+                    fontSize: '0.875rem',
+                    fontWeight: 700,
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+                  }}
+                >
+                  {statusInfo.daysOverdue}
+                </Avatar>
+              </Tooltip>
+            </Box>
+          )}
+          
+          <CardContent sx={{ p: 3, flex: 1, display: 'flex', flexDirection: 'column' }}>
+            {/* Header */}
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', mb: 2 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <Box sx={{ 
+                  width: 50, 
+                  height: 50, 
                   borderRadius: 2,
-                  bgcolor: alpha('#f44336', 0.1),
-                  '&:hover': {
-                    bgcolor: alpha('#f44336', 0.2),
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  bgcolor: alpha(getPurchaseTypeColor(purchase.purchase_type), 0.1),
+                  color: getPurchaseTypeColor(purchase.purchase_type),
+                  position: 'relative',
+                }}>
+                  {getPurchaseTypeIcon(purchase.purchase_type)}
+                  {isCompleted && (
+                    <Box
+                      sx={{
+                        position: 'absolute',
+                        top: -4,
+                        right: -4,
+                        bgcolor: 'success.main',
+                        borderRadius: '50%',
+                        width: 20,
+                        height: 20,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        border: '2px solid white',
+                      }}
+                    >
+                      <CheckCircle sx={{ fontSize: 12, color: 'white' }} />
+                    </Box>
+                  )}
+                </Box>
+                <Box>
+                  <Typography 
+                    variant="h6" 
+                    fontWeight={800}
+                    sx={{
+                      textDecoration: isCompleted ? 'line-through' : 'none',
+                      color: isCompleted ? 'text.secondary' : 'text.primary',
+                    }}
+                  >
+                    {PURCHASE_TYPES.find(pt => pt.value === purchase.purchase_type)?.label || purchase.purchase_type}
+                  </Typography>
+                  {renderStatusBadge(purchase)}
+                </Box>
+              </Box>
+              
+              {purchase.active_offers && purchase.active_offers.length > 0 && (
+                <Badge 
+                  badgeContent={purchase.active_offers.length} 
+                  color={isExpired ? "error" : isOverdue ? "warning" : "success"}
+                >
+                  <LocalOffer color={isExpired ? "error" : isOverdue ? "warning" : "action"} />
+                </Badge>
+              )}
+            </Box>
+
+            {/* Details */}
+            <Stack spacing={1.5} sx={{ mb: 2, flex: 1 }}>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Schedule 
+                  fontSize="small" 
+                  color={isExpired ? "error" : isOverdue ? "warning" : "action"} 
+                />
+                <Box>
+                  <Typography variant="caption" color="text.secondary" display="block">
+                    {isExpired ? 'Was scheduled for' : 
+                     isOverdue ? 'Was due on' : 
+                     'Scheduled for'}
+                  </Typography>
+                  <Typography 
+                    variant="body2" 
+                    fontWeight={600}
+                    sx={{
+                      color: isExpired ? 'error.main' : 
+                             isOverdue ? 'warning.dark' : 'text.primary',
+                    }}
+                  >
+                    {format(parseISO(purchase.scheduled_date), 'PPP p')}
+                  </Typography>
+                  {isOverdue && (
+                    <Typography variant="caption" color="warning.dark" fontWeight={600}>
+                      {statusInfo.daysOverdue} days ago
+                    </Typography>
+                  )}
+                </Box>
+              </Stack>
+
+              {purchase.location && (
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <LocationOn fontSize="small" color="action" />
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      Location
+                    </Typography>
+                    <Typography variant="body2" fontWeight={600}>
+                      {purchase.location}
+                    </Typography>
+                  </Box>
+                </Stack>
+              )}
+
+              {purchase.estimated_amount && (
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <AttachMoney fontSize="small" color="action" />
+                  <Box>
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      Estimated Amount
+                    </Typography>
+                    <Typography variant="body2" fontWeight={600}>
+                      PKR {parseFloat(purchase.estimated_amount.toString()).toLocaleString()}
+                    </Typography>
+                  </Box>
+                </Stack>
+              )}
+            </Stack>
+
+            {/* Recommended Card */}
+            {purchase.recommended_card_detail && !isExpired && (
+              <Paper sx={{ 
+                p: 2, 
+                mb: 2,
+                borderRadius: 2,
+                bgcolor: isOverdue ? alpha('#FF9800', 0.1) : alpha('#2196F3', 0.05),
+                border: '1px solid',
+                borderColor: isOverdue ? 'warning.light' : 'primary.light',
+                position: 'relative',
+              }}>
+                {isOverdue && (
+                  <Tooltip title="Recommendations may be outdated">
+                    <Warning 
+                      sx={{ 
+                        position: 'absolute',
+                        top: 8,
+                        right: 8,
+                        color: 'warning.main',
+                        fontSize: 16,
+                      }} 
+                    />
+                  </Tooltip>
+                )}
+                <Stack direction="row" spacing={2} alignItems="center">
+                  <Avatar sx={{ 
+                    bgcolor: isOverdue ? 'warning.main' : 'primary.main', 
+                    color: 'white' 
+                  }}>
+                    <CreditCardIcon />
+                  </Avatar>
+                  <Box sx={{ flex: 1 }}>
+                    <Typography variant="subtitle2" fontWeight={700} color="primary.dark">
+                      {isOverdue ? 'Previous Recommendation' : 'Recommended Card'}
+                    </Typography>
+                    <Typography variant="body2" fontWeight={600}>
+                      {purchase.recommended_card_detail.name}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {purchase.recommended_card_detail.bank.name}
+                    </Typography>
+                  </Box>
+                </Stack>
+              </Paper>
+            )}
+
+            {/* Expired Warning */}
+            {isExpired && (
+              <Alert 
+                severity="error" 
+                icon={<EventBusy />}
+                sx={{ 
+                  mb: 2, 
+                  borderRadius: 2,
+                  '& .MuiAlert-message': {
+                    width: '100%',
                   }
                 }}
               >
-                <Delete fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </Stack>
-        </CardActions>
-      </Card>
-    </Fade>
-  );
+                <AlertTitle>This purchase has expired</AlertTitle>
+                <Typography variant="body2">
+                  Scheduled {statusInfo.daysOverdue} days ago. Consider rescheduling or marking as completed.
+                </Typography>
+              </Alert>
+            )}
+
+            {/* Overdue Warning */}
+            {isOverdue && !isExpired && (
+              <Alert 
+                severity="warning" 
+                icon={<Timelapse />}
+                sx={{ 
+                  mb: 2, 
+                  borderRadius: 2,
+                  '& .MuiAlert-message': {
+                    width: '100%',
+                  }
+                }}
+              >
+                <AlertTitle>This purchase is overdue</AlertTitle>
+                <Typography variant="body2">
+                  {statusInfo.daysOverdue} days overdue. Complete it soon to avoid missing opportunities.
+                </Typography>
+              </Alert>
+            )}
+
+            {/* Active Offers Preview */}
+            {purchase.active_offers && purchase.active_offers.length > 0 && !isExpired && (
+              <Box sx={{ mb: 2 }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+                    {purchase.active_offers.length} Active Offer{purchase.active_offers.length !== 1 ? 's' : ''}
+                  </Typography>
+                  {isOverdue && (
+                    <Chip
+                      label="Check validity"
+                      size="small"
+                      color="warning"
+                      variant="outlined"
+                      sx={{ height: 20, fontSize: '0.7rem' }}
+                    />
+                  )}
+                </Stack>
+                <Stack direction="row" spacing={1} flexWrap="wrap" gap={0.5}>
+                  {purchase.active_offers.slice(0, 3).map((offer, idx) => (
+                    <Chip
+                      key={idx}
+                      label={`${offer.discount}% OFF`}
+                      size="small"
+                      color={isOverdue ? "warning" : "success"}
+                      variant={isOverdue ? "outlined" : "filled"}
+                      icon={<Percent fontSize="small" />}
+                      sx={{ fontWeight: 600 }}
+                    />
+                  ))}
+                  {purchase.active_offers.length > 3 && (
+                    <Chip
+                      label={`+${purchase.active_offers.length - 3} more`}
+                      size="small"
+                      variant="outlined"
+                    />
+                  )}
+                </Stack>
+              </Box>
+            )}
+          </CardContent>
+
+          {/* Actions */}
+          <CardActions sx={{ 
+            p: 2, 
+            pt: 0, 
+            borderTop: 1, 
+            borderColor: isExpired ? 'error.light' : 
+                       isOverdue ? 'warning.light' : 'divider',
+            mt: 'auto',
+          }}>
+            <Stack direction="row" spacing={1} sx={{ width: '100%' }}>
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<CheckCircle />}
+                onClick={() => purchase.id && handleComplete(purchase.id)}
+                disabled={isCompleted}
+                sx={{ 
+                  flex: 1,
+                  borderRadius: 2,
+                  bgcolor: isCompleted ? 'success.main' : 
+                          isExpired ? 'error.main' : 
+                          isOverdue ? 'warning.main' : 'primary.main',
+                  '&:hover': {
+                    bgcolor: isCompleted ? 'success.dark' : 
+                            isExpired ? 'error.dark' : 
+                            isOverdue ? 'warning.dark' : 'primary.dark',
+                  }
+                }}
+              >
+                {isCompleted ? 'Completed' : 
+                 isExpired ? 'Mark & Close' : 
+                 isOverdue ? 'Complete Now' : 'Mark Complete'}
+              </Button>
+              
+              <Tooltip title={isExpired ? "Delete expired" : "Delete"}>
+                <IconButton
+                  size="small"
+                  color={isExpired ? "error" : "default"}
+                  onClick={() => purchase.id && handleDelete(purchase.id)}
+                  sx={{ 
+                    borderRadius: 2,
+                    bgcolor: isExpired ? alpha('#f44336', 0.1) : alpha('#f5f5f5', 1),
+                    '&:hover': {
+                      bgcolor: isExpired ? alpha('#f44336', 0.2) : alpha('#e0e0e0', 1),
+                    }
+                  }}
+                >
+                  <Delete fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              
+              {isOverdue && !isCompleted && (
+                <Tooltip title="Reschedule">
+                  <IconButton
+                    size="small"
+                    color="primary"
+                    onClick={() => {
+                      setSelectedPurchase(purchase);
+                      setDialogOpen(true);
+                    }}
+                    sx={{ 
+                      borderRadius: 2,
+                      bgcolor: alpha('#2196F3', 0.1),
+                      '&:hover': {
+                        bgcolor: alpha('#2196F3', 0.2),
+                      }
+                    }}
+                  >
+                    <Edit fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              )}
+            </Stack>
+          </CardActions>
+        </Card>
+      </Fade>
+    );
+  };
 
   return (
     <Container maxWidth="xl" sx={{ py: 4 }}>
@@ -543,7 +1020,27 @@ const Planning: React.FC = () => {
                     {purchases?.length || 0}
                   </Typography>
                   <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                    Scheduled Purchases
+                    Total Purchases
+                  </Typography>
+                </Box>
+              </Stack>
+            </Paper>
+          </Grid>
+          <Grid item xs={12} md={3}>
+            <Paper elevation={0} sx={{ 
+              p: 2.5, 
+              borderRadius: 3,
+              background: 'linear-gradient(135deg, #f5576c 0%, #f093fb 100%)',
+              color: 'white'
+            }}>
+              <Stack direction="row" alignItems="center" spacing={2}>
+                <AccessAlarm sx={{ fontSize: 40, opacity: 0.9 }} />
+                <Box>
+                  <Typography variant="h4" fontWeight={900}>
+                    {purchases?.filter(p => getPurchaseStatusInfo(p).isOverdue && !getPurchaseStatusInfo(p).isExpired).length || 0}
+                  </Typography>
+                  <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                    Overdue
                   </Typography>
                 </Box>
               </Stack>
@@ -589,28 +1086,90 @@ const Planning: React.FC = () => {
               </Stack>
             </Paper>
           </Grid>
-          <Grid item xs={12} md={3}>
-            <Paper elevation={0} sx={{ 
-              p: 2.5, 
-              borderRadius: 3,
-              background: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
-              color: 'white'
-            }}>
-              <Stack direction="row" alignItems="center" spacing={2}>
-                <RocketLaunch sx={{ fontSize: 40, opacity: 0.9 }} />
-                <Box>
-                  <Typography variant="h4" fontWeight={900}>
-                    PKR {(purchases?.reduce((acc, p) => acc + (parseFloat(p.estimated_amount?.toString() || '0')), 0) || 0).toLocaleString()}
-                  </Typography>
-                  <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                    Total Planned
-                  </Typography>
-                </Box>
-              </Stack>
-            </Paper>
-          </Grid>
         </Grid>
       </Box>
+
+      {/* Status Tabs */}
+      <Card elevation={2} sx={{ mb: 4, borderRadius: 3 }}>
+        <Tabs
+          value={filterStatus}
+          onChange={(e, newValue) => setFilterStatus(newValue)}
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{
+            borderBottom: 1,
+            borderColor: 'divider',
+            '& .MuiTab-root': {
+              textTransform: 'none',
+              fontWeight: 600,
+              fontSize: '0.9375rem',
+              py: 2,
+              px: 3,
+              minHeight: 54,
+            }
+          }}
+        >
+          <Tab 
+            label={
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Event />
+                <span>All Purchases</span>
+                <Chip 
+                  label={purchases?.length || 0} 
+                  size="small" 
+                  sx={{ height: 20, fontSize: '0.75rem' }}
+                />
+              </Stack>
+            } 
+            value="ALL" 
+          />
+          <Tab 
+            label={
+              <Stack direction="row" spacing={1} alignItems="center">
+                <AccessTime />
+                <span>Active</span>
+                <Chip 
+                  label={purchases?.filter(p => !getPurchaseStatusInfo(p).isOverdue && p.status !== 'COMPLETED').length || 0} 
+                  size="small" 
+                  color="primary"
+                  sx={{ height: 20, fontSize: '0.75rem' }}
+                />
+              </Stack>
+            } 
+            value="ACTIVE" 
+          />
+          <Tab 
+            label={
+              <Stack direction="row" spacing={1} alignItems="center">
+                <PriorityHigh />
+                <span>Overdue</span>
+                <Chip 
+                  label={purchases?.filter(p => getPurchaseStatusInfo(p).isOverdue).length || 0} 
+                  size="small" 
+                  color="warning"
+                  sx={{ height: 20, fontSize: '0.75rem' }}
+                />
+              </Stack>
+            } 
+            value="OVERDUE" 
+          />
+          <Tab 
+            label={
+              <Stack direction="row" spacing={1} alignItems="center">
+                <CheckCircle />
+                <span>Completed</span>
+                <Chip 
+                  label={purchases?.filter(p => p.status === 'COMPLETED').length || 0} 
+                  size="small" 
+                  color="success"
+                  sx={{ height: 20, fontSize: '0.75rem' }}
+                />
+              </Stack>
+            } 
+            value="COMPLETED" 
+          />
+        </Tabs>
+      </Card>
 
       {/* Action Section */}
       <Card elevation={3} sx={{ 
@@ -691,36 +1250,85 @@ const Planning: React.FC = () => {
         </Alert>
       )}
 
+      {/* Overdue Warning */}
+      {purchases?.some(p => getPurchaseStatusInfo(p).isOverdue) && filterStatus !== 'OVERDUE' && (
+        <Alert 
+          severity="warning" 
+          sx={{ 
+            mb: 3, 
+            borderRadius: 3,
+            border: '1px solid',
+            borderColor: 'warning.main',
+            '& .MuiAlert-icon': {
+              fontSize: 28,
+            }
+          }}
+          action={
+            <Button 
+              color="warning" 
+              size="small" 
+              onClick={() => setFilterStatus('OVERDUE')}
+              endIcon={<ArrowForward />}
+            >
+              View Overdue
+            </Button>
+          }
+        >
+          <AlertTitle>You have overdue purchases</AlertTitle>
+          <Typography variant="body2">
+            {purchases.filter(p => getPurchaseStatusInfo(p).isOverdue).length} purchase{purchases.filter(p => getPurchaseStatusInfo(p).isOverdue).length !== 1 ? 's' : ''} need your attention.
+          </Typography>
+        </Alert>
+      )}
+
       {/* Scheduled Purchases */}
       {isLoading ? (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
           <CircularProgress size={60} />
         </Box>
-      ) : filteredPurchases && filteredPurchases.length > 0 ? (
+      ) : sortedPurchases && sortedPurchases.length > 0 ? (
         <Box>
-          {/* Date Groups */}
-          {Object.entries(groupedPurchases || {}).map(([date, datePurchases]) => (
-            <Box key={date} sx={{ mb: 5 }}>
+          {/* Category Groups */}
+          {Object.entries(groupedPurchases || {}).map(([category, categoryPurchases]) => (
+            <Box key={category} sx={{ mb: 5 }}>
               <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 3 }}>
                 <Paper sx={{ 
                   px: 3, 
                   py: 1.5, 
                   borderRadius: 3,
-                  bgcolor: 'primary.main',
+                  bgcolor: category === 'expired' ? 'error.main' : 
+                          category === 'overdue' ? 'warning.main' : 
+                          category === 'approaching' ? 'warning.light' : 
+                          category === 'today' ? 'primary.main' : 
+                          category === 'completed' ? 'success.main' : 'primary.main',
                   color: 'white',
                   fontWeight: 700,
-                  boxShadow: '0 4px 12px rgba(33, 150, 243, 0.4)'
+                  boxShadow: category === 'expired' ? '0 4px 12px rgba(244, 67, 54, 0.4)' :
+                            category === 'overdue' ? '0 4px 12px rgba(255, 152, 0, 0.4)' :
+                            category === 'approaching' ? '0 4px 12px rgba(255, 193, 7, 0.4)' :
+                            '0 4px 12px rgba(33, 150, 243, 0.4)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1.5,
                 }}>
-                  {getDateLabel(date)}
+                  {category === 'expired' && <EventBusy />}
+                  {category === 'overdue' && <PriorityHigh />}
+                  {category === 'approaching' && <Timelapse />}
+                  {category === 'today' && <AccessAlarm />}
+                  {category === 'completed' && <CheckCircle />}
+                  {getCategoryLabel(category)}
                 </Paper>
                 <Typography variant="caption" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                  {datePurchases.length} purchase{datePurchases.length !== 1 ? 's' : ''}
+                  {categoryPurchases.length} purchase{categoryPurchases.length !== 1 ? 's' : ''}
+                  {category === 'expired' && ' • Need attention'}
+                  {category === 'overdue' && ' • Action required'}
+                  {category === 'approaching' && ' • Complete soon'}
                 </Typography>
               </Stack>
               
-              {/* FIXED: Grid layout for horizontal card display */}
+              {/* Grid layout for horizontal card display */}
               <Grid container spacing={3}>
-                {datePurchases.map((purchase) => (
+                {categoryPurchases.map((purchase) => (
                   <Grid item xs={12} sm={6} md={4} lg={3} key={purchase.id}>
                     {renderPurchaseCard(purchase)}
                   </Grid>
@@ -738,26 +1346,48 @@ const Planning: React.FC = () => {
         }}>
           <CalendarMonth sx={{ fontSize: 80, color: 'text.secondary', mb: 3, opacity: 0.5 }} />
           <Typography variant="h4" fontWeight={900} sx={{ mb: 1 }}>
-            No Scheduled Purchases
+            {filterStatus === 'OVERDUE' ? 'No Overdue Purchases' : 
+             filterStatus === 'COMPLETED' ? 'No Completed Purchases' : 
+             'No Scheduled Purchases'}
           </Typography>
           <Typography variant="body1" color="text.secondary" sx={{ mb: 4, maxWidth: 500, mx: 'auto' }}>
-            Plan your purchases to get AI-powered recommendations for maximum savings.
+            {filterStatus === 'OVERDUE' ? 'Great job keeping up with your purchases! 🎉' : 
+             filterStatus === 'COMPLETED' ? 'Complete some purchases to see them here.' : 
+             'Plan your purchases to get AI-powered recommendations for maximum savings.'}
           </Typography>
-          <Button
-            variant="contained"
-            size="large"
-            startIcon={<Add />}
-            onClick={() => setDialogOpen(true)}
-            sx={{ 
-              borderRadius: 3,
-              px: 4,
-              py: 1.5,
-              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-              boxShadow: '0 8px 24px rgba(102, 126, 234, 0.4)'
-            }}
-          >
-            Schedule Your First Purchase
-          </Button>
+          {filterStatus === 'OVERDUE' ? (
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={<Event />}
+              onClick={() => setFilterStatus('ALL')}
+              sx={{ 
+                borderRadius: 3,
+                px: 4,
+                py: 1.5,
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                boxShadow: '0 8px 24px rgba(102, 126, 234, 0.4)'
+              }}
+            >
+              View All Purchases
+            </Button>
+          ) : (
+            <Button
+              variant="contained"
+              size="large"
+              startIcon={<Add />}
+              onClick={() => setDialogOpen(true)}
+              sx={{ 
+                borderRadius: 3,
+                px: 4,
+                py: 1.5,
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                boxShadow: '0 8px 24px rgba(102, 126, 234, 0.4)'
+              }}
+            >
+              Schedule Your First Purchase
+            </Button>
+          )}
         </Card>
       )}
 
@@ -780,7 +1410,7 @@ const Planning: React.FC = () => {
             color: 'white',
           }}>
             <Typography variant="h5" fontWeight={900}>
-              Schedule New Purchase
+              {selectedPurchase ? 'Reschedule Purchase' : 'Schedule New Purchase'}
             </Typography>
             <Typography variant="body2" sx={{ opacity: 0.9 }}>
               Get AI-powered recommendations for your purchase
@@ -895,7 +1525,11 @@ const Planning: React.FC = () => {
           </DialogContent>
           <DialogActions sx={{ p: 3, pt: 0, borderTop: '1px solid #e0e0e0' }}>
             <Button 
-              onClick={() => { setDialogOpen(false); resetForm(); }}
+              onClick={() => { 
+                setDialogOpen(false); 
+                setSelectedPurchase(null);
+                resetForm(); 
+              }}
               sx={{ 
                 borderRadius: 2, 
                 px: 4,
@@ -924,7 +1558,7 @@ const Planning: React.FC = () => {
               {createMutation.isPending ? (
                 <CircularProgress size={24} color="inherit" />
               ) : (
-                'Schedule Purchase'
+                selectedPurchase ? 'Reschedule Purchase' : 'Schedule Purchase'
               )}
             </Button>
           </DialogActions>

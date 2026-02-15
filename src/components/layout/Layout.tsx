@@ -54,6 +54,7 @@ import {
   Security,
 } from '@mui/icons-material';
 import ChatbotWidget from '../chatbot/ChatbotWidget';
+import NotificationBell from '../notifications/NotificationBell';
 
 const drawerWidth = 300;
 const collapsedDrawerWidth = 70;
@@ -263,25 +264,7 @@ const Layout: React.FC = () => {
           </Box>
           
           <Stack direction="row" spacing={1} alignItems="center">
-            {/* <Tooltip title="Notifications">
-              <IconButton
-                color="inherit"
-                sx={{
-                  bgcolor: alpha(theme.palette.common.white, 0.15),
-                  backdropFilter: 'blur(10px)',
-                  border: `1px solid ${alpha(theme.palette.common.white, 0.2)}`,
-                  '&:hover': {
-                    bgcolor: alpha(theme.palette.common.white, 0.25),
-                    transform: 'scale(1.05)',
-                  },
-                  transition: 'all 0.2s ease',
-                }}
-              >
-                <Badge badgeContent={3} color="error">
-                  <Notifications />
-                </Badge>
-              </IconButton>
-            </Tooltip> */}
+            <NotificationBell />
             
             <Tooltip title="Account">
               <IconButton 
